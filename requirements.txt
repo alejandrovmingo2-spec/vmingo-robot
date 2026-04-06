@@ -1,0 +1,4 @@
+requirements.txt
+pandas
+PyPDF2
+xlsxwriter
