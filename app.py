@@ -267,23 +267,24 @@ if st.button("🚀 Procesar Guías", type="primary"):
             hoja_ticket.set_column('D:D', 12)
         # ---------------------------------------------------------
 
-        # 2. Crear PDFs en memoria
-            pdf_writer = PyPDF2.PdfWriter()
-            for po in pos_del_empleado:
-                for pagina in paginas_por_po[po]:
-                    pdf_writer.add_page(pagina)
+# 2. Crear PDFs en memoria
+                    pdf_writer = PyPDF2.PdfWriter()
+                    for po in pos_del_empleado:
+                        for pagina in paginas_por_po[po]:
+                            pdf_writer.add_page(pagina)
 
-            pdf_buffer = io.BytesIO()
-            pdf_writer.write(pdf_buffer)
-            zip_file.writestr(f"Guias_{emp}.pdf", pdf_buffer.getvalue())
+                    pdf_buffer = io.BytesIO()
+                    pdf_writer.write(pdf_buffer)
+                    zip_file.writestr(f"Guias_{emp}.pdf", pdf_buffer.getvalue())
 
-        # Guardar el Excel en el ZIP
-        zip_file.writestr("Reparticion_Automatizada.xlsx", excel_buffer.getvalue())
+            # Guardar el Excel en el ZIP (Fuera del loop de empleados)
+            zip_file.writestr("Reparticion_Automatizada.xlsx", excel_buffer.getvalue())
 
-    st.balloons()
-    st.success("✨ ¡Todo listo! Se ha generado un archivo ZIP con el Excel de repartición y los PDFs individuales.")
+        # Mostrar éxito y botón de descarga (Fuera del archivo ZIP)
+        st.balloons()
+        st.success("✨ ¡Todo listo! Se ha generado un archivo ZIP con el Excel de repartición y los PDFs individuales.")
         
-    st.download_button(
+        st.download_button(
             label="📦 Descargar Todos los Documentos (ZIP)",
             data=zip_buffer.getvalue(),
             file_name="Documentos_Vmingo.zip",
