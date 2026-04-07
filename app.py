@@ -256,18 +256,18 @@ if st.button("🚀 Procesar Guías", type="primary"):
             total_items += int(datos[2])
             
         # 4. Total General al fondo
-        ultima_fila = len(datos_picking) + 4
-        hoja_ticket.write(ultima_fila, 2, 'Total general', formato_bold)
-        hoja_ticket.write(ultima_fila, 3, total_items, formato_bold)
-        
-      # 5. Ajustar ancho de columnas 
+            ultima_fila = len(datos_picking) + 4
+            hoja_ticket.write(ultima_fila, 2, 'Total general', formato_bold)
+            hoja_ticket.write(ultima_fila, 3, total_items, formato_bold)
+            
+        # 5. Ajustar ancho de columnas 
             hoja_ticket.set_column('A:A', 5)
             hoja_ticket.set_column('B:B', 20)
             hoja_ticket.set_column('C:C', 50)
             hoja_ticket.set_column('D:D', 12)
-            # ---------------------------------------------------------
+        # ---------------------------------------------------------
 
-            # 2. Crear PDFs en memoria
+        # 2. Crear PDFs en memoria
             pdf_writer = PyPDF2.PdfWriter()
             for po in pos_del_empleado:
                 for pagina in paginas_por_po[po]:
