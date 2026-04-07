@@ -222,6 +222,51 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         })
                         worksheet.set_column('D:D', 10)
 
+                        # ---------------------------------------------------------
+        # NUEVO BLOQUE: CREAR LA HOJA DE TICKETS (LISTA DE RECOLECCIÓN)
+        # ---------------------------------------------------------
+        hoja_ticket = writer.book.add_worksheet(f"{emp}_Ticket")
+        
+        # Formatos básicos para que se vea como en tu Excel original
+        formato_bold = writer.book.add_format({'bold': True, 'align': 'center'})
+        formato_borde = writer.book.add_format({'border': 1})
+        formato_borde_centro = writer.book.add_format({'border': 1, 'align': 'center'})
+        
+        # 1. Título Dinámico de la División (1, 2, 3...) usando 'i'
+        num_division = i + 1
+        hoja_ticket.write('A1', f'DIVISION {num_division}', formato_bold)
+        hoja_ticket.write('D1', 'TEMU', formato_bold) 
+        hoja_ticket.write('A2', emp.upper(), formato_bold)
+        
+        # 2. Encabezados de la tabla
+        encabezados = ['NO', 'SKU', 'NOMBRE COMUN', 'CANTIDAD']
+        for col, encabezado in enumerate(encabezados):
+            hoja_ticket.write(3, col, encabezado, formato_bold)
+            
+        # 3. Llenar los datos extraídos de picking_list
+        total_items = 0
+        datos_picking = picking_list.values.tolist()
+        
+        for fila_idx, datos in enumerate(datos_picking):
+            fila_excel = fila_idx + 4
+            hoja_ticket.write(fila_excel, 0, fila_idx + 1, formato_borde_centro) 
+            hoja_ticket.write(fila_excel, 1, datos[0], formato_borde)            
+            hoja_ticket.write(fila_excel, 2, datos[1], formato_borde)            
+            hoja_ticket.write(fila_excel, 3, datos[2], formato_borde_centro)     
+            total_items += int(datos[2])
+            
+        # 4. Total General al fondo
+        ultima_fila = len(datos_picking) + 4
+        hoja_ticket.write(ultima_fila, 2, 'Total general', formato_bold)
+        hoja_ticket.write(ultima_fila, 3, total_items, formato_bold)
+        
+        # 5. Ajustar ancho de columnas 
+        hoja_ticket.set_column('A:A', 5)
+        hoja_ticket.set_column('B:B', 20)
+        hoja_ticket.set_column('C:C', 50)
+        hoja_ticket.set_column('D:D', 12)
+        # ---------------------------------------------------------
+                        
                         # 2. Crear PDFs en memoria
                         pdf_writer = PyPDF2.PdfWriter()
                         for po in pos_del_empleado:
