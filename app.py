@@ -283,7 +283,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
     st.balloons()
     st.success("✨ ¡Todo listo! Se ha generado un archivo ZIP con el Excel de repartición y los PDFs individuales.")
         
-        st.download_button(
+    st.download_button(
             label="📦 Descargar Todos los Documentos (ZIP)",
             data=zip_buffer.getvalue(),
             file_name="Documentos_Vmingo.zip",
