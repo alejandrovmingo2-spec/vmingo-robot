@@ -167,7 +167,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
             st.error("❌ ERROR: Ningún pedido del PDF coincidió con el CSV.")
             st.stop()
 
-        # --- REPARTICIÓN Y CREACIÓN DE ARCHIVOS EN MEMORIA ---
+# --- REPARTICIÓN Y CREACIÓN DE ARCHIVOS EN MEMORIA ---
         num_empleados = len(empleados)
         pos_base = len(lista_pos_unicos) // num_empleados
         sobrantes = len(lista_pos_unicos) % num_empleados
@@ -183,20 +183,20 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     indice_fin = indice_inicio + cantidades_por_empleado[i]
                     pos_del_empleado = lista_pos_unicos[indice_inicio:indice_fin]
                     indice_inicio = indice_fin
-
+                    
                     df_emp = df_ordenado[df_ordenado['PEDIDO'].isin(pos_del_empleado)].copy()
-
+                    
                     if not df_emp.empty:
-                        # 1. Crear Pestañas del Excel
+                        # 1. Crear Pestañas Principales del Excel
                         worksheet = writer.book.add_worksheet(emp)
                         formato_titulo = writer.book.add_format({'bold': True, 'font_size': 14, 'bg_color': '#D9D9D9', 'border': 1})
                         worksheet.write(0, 0, f"LISTA DE RECOLECCIÓN PARA: {emp.upper()}", formato_titulo)
                         worksheet.write(1, 0, f"Total de guías asignadas: {len(pos_del_empleado)}")
-
+                        
                         picking_list = df_emp.groupby(['SKU', 'Nombre Correcto'])['CANTIDAD'].sum().reset_index()
                         picking_list.rename(columns={'Nombre Correcto': 'Descripción (Según BASE)', 'CANTIDAD': 'Total a Recolectar'}, inplace=True)
                         picking_list = picking_list.sort_values(by='Descripción (Según BASE)').reset_index(drop=True)
-
+                        
                         inicio_t1 = 3
                         fin_t1 = inicio_t1 + len(picking_list)
                         picking_list.to_excel(writer, sheet_name=emp, index=False, header=False, startrow=inicio_t1 + 1, startcol=0)
@@ -205,82 +205,66 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         })
                         worksheet.set_column('A:A', 20)
                         worksheet.set_column('B:B', 65)
-                        worksheet.set_column('C:C', 18)
-
-                        # Orden de guías
-                        inicio_t2 = fin_t1 + 4
-                        worksheet.write(inicio_t2 - 2, 0, f"ORDEN EXACTO DE GUÍAS DE {emp.upper()}:", formato_titulo)
-                        df_emp['PEDIDO'] = pd.Categorical(df_emp['PEDIDO'], categories=pos_del_empleado, ordered=True)
-                        df_emp = df_emp.sort_values('PEDIDO')
-                        df_emp_detalle = df_emp[['PEDIDO', 'SKU', 'Nombre Correcto', 'CANTIDAD']].copy()
-                        df_emp_detalle.rename(columns={'CANTIDAD': 'Cant.'}, inplace=True)
-
-                        fin_t2 = inicio_t2 + len(df_emp_detalle)
-                        df_emp_detalle.to_excel(writer, sheet_name=emp, index=False, header=False, startrow=inicio_t2 + 1, startcol=0)
-                        worksheet.add_table(inicio_t2, 0, fin_t2, len(df_emp_detalle.columns) - 1, {
-                            'columns': [{'header': col} for col in df_emp_detalle.columns], 'style': 'Table Style Light 11'
-                        })
-                        worksheet.set_column('D:D', 10)
-
+                        
                         # ---------------------------------------------------------
-        # NUEVO BLOQUE: CREAR LA HOJA DE TICKETS (LISTA DE RECOLECCIÓN)
-        # ---------------------------------------------------------
-        hoja_ticket = writer.book.add_worksheet(f"{emp}_Ticket")
-        
-        # Formatos básicos para que se vea como en tu Excel original
-        formato_bold = writer.book.add_format({'bold': True, 'align': 'center'})
-        formato_borde = writer.book.add_format({'border': 1})
-        formato_borde_centro = writer.book.add_format({'border': 1, 'align': 'center'})
-        
-        # 1. Título Dinámico de la División (1, 2, 3...) usando 'i'
-        num_division = i + 1
-        hoja_ticket.write('A1', f'DIVISION {num_division}', formato_bold)
-        hoja_ticket.write('D1', 'TEMU', formato_bold) 
-        hoja_ticket.write('A2', emp.upper(), formato_bold)
-        
-        # 2. Encabezados de la tabla
-        encabezados = ['NO', 'SKU', 'NOMBRE COMUN', 'CANTIDAD']
-        for col, encabezado in enumerate(encabezados):
-            hoja_ticket.write(3, col, encabezado, formato_bold)
-            
-        # 3. Llenar los datos extraídos de picking_list
-        total_items = 0
-        datos_picking = picking_list.values.tolist()
-        
-        for fila_idx, datos in enumerate(datos_picking):
-            fila_excel = fila_idx + 4
-            hoja_ticket.write(fila_excel, 0, fila_idx + 1, formato_borde_centro) 
-            hoja_ticket.write(fila_excel, 1, datos[0], formato_borde)            
-            hoja_ticket.write(fila_excel, 2, datos[1], formato_borde)            
-            hoja_ticket.write(fila_excel, 3, datos[2], formato_borde_centro)     
-            total_items += int(datos[2])
-            
-        # 4. Total General al fondo
-            ultima_fila = len(datos_picking) + 4
-            hoja_ticket.write(ultima_fila, 2, 'Total general', formato_bold)
-            hoja_ticket.write(ultima_fila, 3, total_items, formato_bold)
-            
-        # 5. Ajustar ancho de columnas 
-            hoja_ticket.set_column('A:A', 5)
-            hoja_ticket.set_column('B:B', 20)
-            hoja_ticket.set_column('C:C', 50)
-            hoja_ticket.set_column('D:D', 12)
-        # ---------------------------------------------------------
+                        # 2. CREAR LA HOJA DE TICKETS (LISTA DE RECOLECCIÓN)
+                        # ---------------------------------------------------------
+                        hoja_ticket = writer.book.add_worksheet(f"{emp}_Ticket")
+                        
+                        formato_bold = writer.book.add_format({'bold': True, 'align': 'center'})
+                        formato_borde = writer.book.add_format({'border': 1})
+                        formato_borde_centro = writer.book.add_format({'border': 1, 'align': 'center'})
+                        
+                        # Generar el número de división (1, 2, 3...)
+                        num_division = i + 1
+                        hoja_ticket.write('A1', f'DIVISION {num_division}', formato_bold)
+                        hoja_ticket.write('D1', 'TEMU', formato_bold) 
+                        hoja_ticket.write('A2', emp.upper(), formato_bold)
+                        
+                        encabezados = ['NO', 'SKU', 'NOMBRE COMUN', 'CANTIDAD']
+                        for col, encabezado in enumerate(encabezados):
+                            hoja_ticket.write(3, col, encabezado, formato_bold)
+                            
+                        total_items = 0
+                        datos_picking = picking_list.values.tolist()
+                        
+                        for fila_idx, datos in enumerate(datos_picking):
+                            fila_excel = fila_idx + 4
+                            hoja_ticket.write(fila_excel, 0, fila_idx + 1, formato_borde_centro) 
+                            hoja_ticket.write(fila_excel, 1, datos[0], formato_borde)            
+                            hoja_ticket.write(fila_excel, 2, datos[1], formato_borde)            
+                            hoja_ticket.write(fila_excel, 3, datos[2], formato_borde_centro)     
+                            total_items += int(datos[2])
+                            
+                        ultima_fila = len(datos_picking) + 4
+                        hoja_ticket.write(ultima_fila, 2, 'Total general', formato_bold)
+                        hoja_ticket.write(ultima_fila, 3, total_items, formato_bold)
+                        
+                        hoja_ticket.set_column('A:A', 5)
+                        hoja_ticket.set_column('B:B', 20)
+                        hoja_ticket.set_column('C:C', 50)
+                        hoja_ticket.set_column('D:D', 12)
+                        
+                        # ---------------------------------------------------------
+                        # 3. CREAR PDFs EN MEMORIA
+                        # ---------------------------------------------------------
+                        pdf_writer = PyPDF2.PdfWriter()
+                        for po in pos_del_empleado:
+                            if po in paginas_por_po:
+                                for pagina in paginas_por_po[po]:
+                                    pdf_writer.add_page(pagina)
 
-# 2. Crear PDFs en memoria
-                    pdf_writer = PyPDF2.PdfWriter()
-                    for po in pos_del_empleado:
-                        for pagina in paginas_por_po[po]:
-                            pdf_writer.add_page(pagina)
+                        pdf_buffer = io.BytesIO()
+                        pdf_writer.write(pdf_buffer)
+                        zip_file.writestr(f"Guias_{emp}.pdf", pdf_buffer.getvalue())
 
-                    pdf_buffer = io.BytesIO()
-                    pdf_writer.write(pdf_buffer)
-                    zip_file.writestr(f"Guias_{emp}.pdf", pdf_buffer.getvalue())
-
-            # Guardar el Excel en el ZIP (Fuera del loop de empleados)
+            # Guardar el Excel en el ZIP (Se cierra el Excel aquí)
             zip_file.writestr("Reparticion_Automatizada.xlsx", excel_buffer.getvalue())
 
-        # Mostrar éxito y botón de descarga (Fuera del archivo ZIP)
+        # (Se cierra el ZIP aquí)
+        # ---------------------------------------------------------
+        # 4. MOSTRAR BOTÓN DE DESCARGA
+        # ---------------------------------------------------------
         st.balloons()
         st.success("✨ ¡Todo listo! Se ha generado un archivo ZIP con el Excel de repartición y los PDFs individuales.")
         
