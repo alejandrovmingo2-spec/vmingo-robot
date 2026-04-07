@@ -4,6 +4,7 @@ import PyPDF2
 import re
 import io
 import zipfile
+from datetime import datetime
 
 st.set_page_config(page_title="Robot Multiplataforma Vmingo", page_icon="🤖", layout="centered")
 
@@ -97,17 +98,21 @@ if st.button("🚀 Procesar Guías", type="primary"):
             if matches:
                 po_encontrado = str(matches[0]).strip()
                 
-                # CORRECCIÓN PARA SHEIN: Fusionar etiquetas mal leídas con su declaración correcta
+                # CORRECCIÓN PARA SHEIN: Evitar borrar páginas de paquetes múltiples
                 if plataforma == 'SHEIN' and 'DECLARACIÓN DE CONTENIDO' in texto:
                     if po_actual and po_actual != po_encontrado:
                         if po_actual in paginas_por_po:
-                            paginas_por_po[po_encontrado] = paginas_por_po.pop(po_actual)
-                            
+                            paginas_viejas = paginas_por_po.pop(po_actual)
+                            # AQUÍ ESTÁ EL ARREGLO: 'extend' en lugar de '=' para sumar los paquetes sin borrarlos
+                            if po_encontrado in paginas_por_po:
+                                paginas_por_po[po_encontrado].extend(paginas_viejas)
+                            else:
+                                paginas_por_po[po_encontrado] = paginas_viejas
+                                
                     po_actual = po_encontrado
                     
                     if po_actual not in paginas_por_po:
                         paginas_por_po[po_actual] = []
-                        # Rescate: si se saltó la página 1, la recuperamos
                         if num_pagina > 0 and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
                             paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
                             
@@ -120,7 +125,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     if po_actual not in paginas_por_po:
                         paginas_por_po[po_actual] = []
                         if plataforma == 'TEMU' and num_pagina > 0:
-                            paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
+                            if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
+                                paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
                     
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
@@ -338,16 +344,22 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
             zip_file.writestr("Reparticion_Automatizada.xlsx", excel_buffer.getvalue())
 
+        # Guardamos la descarga y el nombre de la plataforma en la memoria
         st.session_state['descarga_lista'] = zip_buffer.getvalue()
+        st.session_state['plataforma_procesada'] = plataforma
 
 if 'descarga_lista' in st.session_state:
     st.balloons()
     st.success("✨ ¡Todo listo! Se ha generado un archivo ZIP con el Excel de repartición y los PDFs individuales.")
     
+    plat = st.session_state.get('plataforma_procesada', 'Vmingo')
+    fecha = datetime.now().strftime("%d-%m-%Y")
+    nombre_archivo = f"Guias_{plat}_{fecha}.zip"
+    
     st.download_button(
-        label="📦 Descargar Todos los Documentos (ZIP)",
+        label=f"📦 Descargar {nombre_archivo}",
         data=st.session_state['descarga_lista'],
-        file_name="Documentos_Vmingo.zip",
+        file_name=nombre_archivo,
         mime="application/zip",
         type="primary"
     )
