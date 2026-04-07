@@ -1,4 +1,5 @@
-requirements.txt
+streamlit
 pandas
 PyPDF2
 xlsxwriter
+openpyxl
