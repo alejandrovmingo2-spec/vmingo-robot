@@ -62,16 +62,18 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
         # --- LEYENDO BASE ---
         diccionario_nombres = {}
+        diccionario_comun = {}
         if archivo_base:
             try:
                 df_base = pd.read_excel(archivo_base, sheet_name='BASE')
                 df_base.columns = df_base.columns.str.strip().str.upper() 
-                if 'SKU' in df_base.columns and 'NOMBRE PLATAFORMA' in df_base.columns:
-                    for idx, fila in df_base.iterrows():
-                        sku = str(fila['SKU']).strip()
-                        nombre = str(fila['NOMBRE PLATAFORMA']).strip()
-                        if pd.notna(sku) and sku != 'nan':
-                            diccionario_nombres[sku] = nombre
+                for idx, fila in df_base.iterrows():
+                    sku = str(fila.get('SKU', '')).strip()
+                    if pd.notna(sku) and sku != 'nan' and sku != '':
+                        if 'NOMBRE PLATAFORMA' in df_base.columns:
+                            diccionario_nombres[sku] = str(fila['NOMBRE PLATAFORMA']).strip()
+                        if 'NOMBRE COMUN' in df_base.columns:
+                            diccionario_comun[sku] = str(fila['NOMBRE COMUN']).strip()
             except Exception as e:
                 st.warning(f"⚠️ Hubo un detalle al leer tu hoja BASE: {e}")
 
@@ -98,7 +100,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 if pagina not in paginas_por_po[po_actual]:
                     paginas_por_po[po_actual].append(pagina)
             else:
-                if plataforma == 'TIKTOK' and po_actual:
+                # AQUÍ SE AÑADIÓ LA CONDICIÓN PARA GUÍAS DE MÁS DE 2 PÁGINAS
+                if po_actual:
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
 
@@ -154,6 +157,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 )
             ), axis=1
         )
+        
+        # Agregar NOMBRE COMUN para uso exclusivo de los tickets
+        df_filtrado['NOMBRE COMUN'] = df_filtrado['SKU'].apply(
+            lambda x: diccionario_comun.get(str(x).strip(), "N/A")
+        )
 
         filas_ordenadas = []
         for po in lista_pos_unicos:
@@ -193,6 +201,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         worksheet.write(0, 0, f"LISTA DE RECOLECCIÓN PARA: {emp.upper()}", formato_titulo)
                         worksheet.write(1, 0, f"Total de guías asignadas: {len(pos_del_empleado)}")
                         
+                        # --- TABLA SUPERIOR (Agrupada por Nombre Correcto) ---
                         picking_list = df_emp.groupby(['SKU', 'Nombre Correcto'])['CANTIDAD'].sum().reset_index()
                         picking_list.rename(columns={'Nombre Correcto': 'Descripción (Según BASE)', 'CANTIDAD': 'Total a Recolectar'}, inplace=True)
                         picking_list = picking_list.sort_values(by='Descripción (Según BASE)').reset_index(drop=True)
@@ -205,6 +214,14 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         })
                         worksheet.set_column('A:A', 20)
                         worksheet.set_column('B:B', 65)
+
+                        # --- TABLA INFERIOR (Orden Exacto de Guías restaurado) ---
+                        fila_orden = fin_t1 + 3
+                        worksheet.write(fila_orden, 0, f"ORDEN EXACTO DE GUÍAS DE {emp.upper()}:", formato_titulo)
+                        
+                        df_orden = df_emp[['PEDIDO', 'SKU', 'Nombre Correcto', 'CANTIDAD']].copy()
+                        df_orden.rename(columns={'CANTIDAD': 'Cant.'}, inplace=True)
+                        df_orden.to_excel(writer, sheet_name=emp, index=False, startrow=fila_orden + 2, startcol=0)
                         
                         # ---------------------------------------------------------
                         # 2. CREAR LA HOJA DE TICKETS (LISTA DE RECOLECCIÓN)
@@ -214,21 +231,35 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         formato_bold = writer.book.add_format({'bold': True, 'align': 'center'})
                         formato_borde = writer.book.add_format({'border': 1})
                         formato_borde_centro = writer.book.add_format({'border': 1, 'align': 'center'})
+                        formato_bold_wrap = writer.book.add_format({'bold': True, 'align': 'center', 'text_wrap': True})
                         
-                        # Generar el número de división (1, 2, 3...)
                         num_division = i + 1
                         hoja_ticket.write('A1', f'DIVISION {num_division}', formato_bold)
-                        hoja_ticket.write('D1', 'TEMU', formato_bold) 
+                        hoja_ticket.write('D1', plataforma.upper(), formato_bold) 
                         hoja_ticket.write('A2', emp.upper(), formato_bold)
                         
-                        encabezados = ['NO', 'SKU', 'NOMBRE COMUN', 'CANTIDAD']
+                        encabezados = ['NO', 'SKU', 'NOMBRE COMUN', 'CANTI\nDAD']
                         for col, encabezado in enumerate(encabezados):
-                            hoja_ticket.write(3, col, encabezado, formato_bold)
+                            if encabezado == 'CANTI\nDAD':
+                                hoja_ticket.write(3, col, encabezado, formato_bold_wrap)
+                            else:
+                                hoja_ticket.write(3, col, encabezado, formato_bold)
                             
-                        total_items = 0
-                        datos_picking = picking_list.values.tolist()
+                        # Agrupar estrictamente por NOMBRE COMUN para el ticket
+                        ticket_list = df_emp.groupby(['SKU', 'NOMBRE COMUN'])['CANTIDAD'].sum().reset_index()
                         
-                        for fila_idx, datos in enumerate(datos_picking):
+                        # Si algún producto no estaba en la base, rellenar con Nombre Correcto para que no se quede vacío
+                        for idx_row, row_data in ticket_list.iterrows():
+                            if row_data['NOMBRE COMUN'] == "N/A":
+                                nombre_corr = df_emp[df_emp['SKU'] == row_data['SKU']]['Nombre Correcto'].iloc[0]
+                                ticket_list.at[idx_row, 'NOMBRE COMUN'] = nombre_corr
+                                
+                        ticket_list = ticket_list.sort_values(by='NOMBRE COMUN').reset_index(drop=True)
+                        
+                        total_items = 0
+                        datos_ticket = ticket_list.values.tolist()
+                        
+                        for fila_idx, datos in enumerate(datos_ticket):
                             fila_excel = fila_idx + 4
                             hoja_ticket.write(fila_excel, 0, fila_idx + 1, formato_borde_centro) 
                             hoja_ticket.write(fila_excel, 1, datos[0], formato_borde)            
@@ -236,7 +267,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                             hoja_ticket.write(fila_excel, 3, datos[2], formato_borde_centro)     
                             total_items += int(datos[2])
                             
-                        ultima_fila = len(datos_picking) + 4
+                        ultima_fila = len(datos_ticket) + 4
                         hoja_ticket.write(ultima_fila, 2, 'Total general', formato_bold)
                         hoja_ticket.write(ultima_fila, 3, total_items, formato_bold)
                         
@@ -244,6 +275,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         hoja_ticket.set_column('B:B', 20)
                         hoja_ticket.set_column('C:C', 50)
                         hoja_ticket.set_column('D:D', 12)
+                        hoja_ticket.set_row(3, 30) # Altura para que el salto de línea encaje perfecto
                         
                         # ---------------------------------------------------------
                         # 3. CREAR PDFs EN MEMORIA
@@ -258,10 +290,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         pdf_writer.write(pdf_buffer)
                         zip_file.writestr(f"Guias_{emp}.pdf", pdf_buffer.getvalue())
 
-            # Guardar el Excel en el ZIP (Se cierra el Excel aquí)
+            # Guardar el Excel en el ZIP
             zip_file.writestr("Reparticion_Automatizada.xlsx", excel_buffer.getvalue())
 
-        # (Se cierra el ZIP aquí)
         # ---------------------------------------------------------
         # 4. MOSTRAR BOTÓN DE DESCARGA
         # ---------------------------------------------------------
