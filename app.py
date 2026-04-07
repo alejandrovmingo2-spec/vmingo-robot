@@ -96,15 +96,34 @@ if st.button("🚀 Procesar Guías", type="primary"):
             
             if matches:
                 po_encontrado = str(matches[0]).strip()
-                po_actual = po_encontrado 
                 
-                if po_actual not in paginas_por_po:
-                    paginas_por_po[po_actual] = []
-                    if plataforma == 'TEMU' and num_pagina > 0:
-                        paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
-                
-                if pagina not in paginas_por_po[po_actual]:
-                    paginas_por_po[po_actual].append(pagina)
+                # CORRECCIÓN PARA SHEIN: Fusionar etiquetas mal leídas con su declaración correcta
+                if plataforma == 'SHEIN' and 'DECLARACIÓN DE CONTENIDO' in texto:
+                    if po_actual and po_actual != po_encontrado:
+                        if po_actual in paginas_por_po:
+                            paginas_por_po[po_encontrado] = paginas_por_po.pop(po_actual)
+                            
+                    po_actual = po_encontrado
+                    
+                    if po_actual not in paginas_por_po:
+                        paginas_por_po[po_actual] = []
+                        # Rescate: si se saltó la página 1, la recuperamos
+                        if num_pagina > 0 and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
+                            paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
+                            
+                    if pagina not in paginas_por_po[po_actual]:
+                        paginas_por_po[po_actual].append(pagina)
+                        
+                else:
+                    po_actual = po_encontrado 
+                    
+                    if po_actual not in paginas_por_po:
+                        paginas_por_po[po_actual] = []
+                        if plataforma == 'TEMU' and num_pagina > 0:
+                            paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
+                    
+                    if pagina not in paginas_por_po[po_actual]:
+                        paginas_por_po[po_actual].append(pagina)
             else:
                 if plataforma in ['TIKTOK', 'SHEIN'] and po_actual:
                     if pagina not in paginas_por_po[po_actual]:
@@ -156,10 +175,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
             columnas_existentes = [col for col in columnas_utiles if col in df.columns]
             df_filtrado = df[columnas_existentes].copy()
             
-            # Shein no trae cantidad agrupada, cada fila es 1 pieza
             df_filtrado['CANTIDAD'] = 1
             
-            # Logica Híbrida: Usar Guía JMX si existe, si no, usar Pedido GSH
             def get_shein_po(row):
                 guia = str(row.get('Número de guía', '')).strip()
                 if guia.startswith('JMX'):
