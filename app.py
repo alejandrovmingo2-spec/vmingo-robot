@@ -35,7 +35,8 @@ st.markdown("Sube tus documentos para repartir las guías de forma equitativa.")
 # --- INTERFAZ DE USUARIO ---
 col1, col2 = st.columns(2)
 with col1:
-    archivo_csv = st.file_uploader("1. Sube el CSV (Temu/TikTok)", type=["csv"])
+    # Ya dejé el texto preparado para cuando agreguemos Shein
+    archivo_csv = st.file_uploader("1. Sube el CSV (Temu/TikTok/Shein)", type=["csv"])
     archivo_pdf = st.file_uploader("2. Sube el PDF gigante", type=["pdf"])
 with col2:
     archivo_base = st.file_uploader("3. Sube tu BASE (Opcional)", type=["xlsx", "xlsm"])
@@ -176,7 +177,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
         sobrantes = len(lista_pos_unicos) % num_empleados
         cantidades_por_empleado = [pos_base + (1 if i < sobrantes else 0) for i in range(num_empleados)]
 
-        # Lista de colores para identificar cada división
         colores_division = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD']
 
         zip_buffer = io.BytesIO()
@@ -230,6 +230,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         
                         # Formatos dinámicos y con ajuste de texto (text_wrap)
                         fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
+                        # Nuevo formato exclusivo para el nombre (más grande)
+                        fmt_titulo_ticket = writer.book.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
+                        
                         fmt_td_centro = writer.book.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
                         fmt_td_izq = writer.book.add_format({'border': 1, 'align': 'left', 'valign': 'vcenter', 'text_wrap': True})
                         fmt_total = writer.book.add_format({'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#D9D9D9'})
@@ -238,7 +241,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         num_division = i + 1
                         hoja_ticket.write('A1', f'DIVISION {num_division}', fmt_header)
                         hoja_ticket.write('D1', plataforma.upper(), fmt_header) 
-                        hoja_ticket.write('A2', emp.upper(), fmt_header)
+                        
+                        # AQUÍ ESTÁ EL CAMBIO: El nombre ahora es un título grande y centrado que abarca de la columna A a la D
+                        hoja_ticket.merge_range('A2:D2', emp.upper(), fmt_titulo_ticket)
                         
                         encabezados = ['NO', 'SKU', 'NOMBRE COMUN', 'CANTI\nDAD']
                         for col, encabezado in enumerate(encabezados):
@@ -270,10 +275,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         hoja_ticket.set_column('C:C', 38)
                         hoja_ticket.set_column('D:D', 6)
                         hoja_ticket.set_row(3, 30) 
+                        hoja_ticket.set_row(1, 25) # Darle más altura a la fila del Nombre para que luzca como título
                         
                         # Ajustes de página para Impresora Térmica
-                        hoja_ticket.fit_to_pages(1, 0) # Forzar el contenido al ancho de 1 página
-                        hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1) # Reducir márgenes al mínimo
+                        hoja_ticket.fit_to_pages(1, 0) 
+                        hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1) 
                         
                         # ---------------------------------------------------------
                         # 3. CREAR PDFs EN MEMORIA
