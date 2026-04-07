@@ -25,6 +25,8 @@ def detectar_plataforma_web(archivo_csv_buffer):
                     return 'TEMU', cod
                 if 'Order ID' in linea and 'Seller SKU' in linea:
                     return 'TIKTOK', cod
+                if 'Número de pedido' in linea and 'SKU del vendedor' in linea:
+                    return 'SHEIN', cod
         except:
             pass
     return 'DESCONOCIDA', None
@@ -35,8 +37,7 @@ st.markdown("Sube tus documentos para repartir las guías de forma equitativa.")
 # --- INTERFAZ DE USUARIO ---
 col1, col2 = st.columns(2)
 with col1:
-    # Ya dejé el texto preparado para cuando agreguemos Shein
-    archivo_csv = st.file_uploader("1. Sube el CSV (Temu/TikTok/Shein)", type=["csv"])
+    archivo_csv = st.file_uploader("1. Sube el CSV (Temu / TikTok / Shein)", type=["csv"])
     archivo_pdf = st.file_uploader("2. Sube el PDF gigante", type=["pdf"])
 with col2:
     archivo_base = st.file_uploader("3. Sube tu BASE (Opcional)", type=["xlsx", "xlsm"])
@@ -56,7 +57,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
     with st.spinner("Analizando documentos..."):
         plataforma, codificacion = detectar_plataforma_web(archivo_csv)
         if plataforma == 'DESCONOCIDA':
-            st.error("❌ ERROR: No pude identificar si el CSV es de Temu o de TikTok. Verifica las columnas.")
+            st.error("❌ ERROR: No pude identificar si el CSV es de Temu, TikTok o Shein. Verifica las columnas.")
             st.stop()
             
         st.success(f"¡Plataforma detectada!: **{plataforma}**")
@@ -80,7 +81,13 @@ if st.button("🚀 Procesar Guías", type="primary"):
         paginas_por_po = {}
         reader = PyPDF2.PdfReader(archivo_pdf)
         
-        patron_pdf = r'PO-\d{3}-\d+' if plataforma == 'TEMU' else r'(JMX\d+)' 
+        if plataforma == 'TEMU':
+            patron_pdf = r'PO-\d{3}-\d+'
+        elif plataforma == 'SHEIN':
+            patron_pdf = r'(JMX\d+|GSH\w+)' 
+        else:
+            patron_pdf = r'(JMX\d+)'
+            
         po_actual = None 
         
         for num_pagina, pagina in enumerate(reader.pages):
@@ -99,7 +106,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 if pagina not in paginas_por_po[po_actual]:
                     paginas_por_po[po_actual].append(pagina)
             else:
-                if plataforma == 'TIKTOK' and po_actual:
+                if plataforma in ['TIKTOK', 'SHEIN'] and po_actual:
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
 
@@ -111,11 +118,13 @@ if st.button("🚀 Procesar Guías", type="primary"):
         lineas = texto_csv.splitlines()
         skip_lineas = 0
         for i, linea in enumerate(lineas):
-            if (plataforma == 'TEMU' and 'ID del pedido' in linea) or (plataforma == 'TIKTOK' and 'Order ID' in linea):
+            if (plataforma == 'TEMU' and 'ID del pedido' in linea) or \
+               (plataforma == 'TIKTOK' and 'Order ID' in linea) or \
+               (plataforma == 'SHEIN' and 'Número de pedido' in linea):
                 skip_lineas = i
                 break
                 
-        archivo_csv.seek(0) # Reiniciar lectura
+        archivo_csv.seek(0) 
         df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion)
         df.columns = df.columns.str.strip()
 
@@ -127,19 +136,42 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 'nombre del producto': 'NOMBRE_ORIGINAL', 'variación': 'VARIACION',
                 'cantidad a enviar': 'CANTIDAD'
             }, inplace=True)
-        else: # TIKTOK
+            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
+            
+        elif plataforma == 'TIKTOK':
             columnas_utiles = ['Order ID', 'Seller SKU', 'Product Name', 'Variation', 'Quantity', 'Tracking ID']
             columnas_existentes = [col for col in columnas_utiles if col in df.columns]
             df_filtrado = df[columnas_existentes].copy()
-            
             if 'Order ID' in df_filtrado.columns and 'Product Name' in df_filtrado.columns and 'Variation' in df_filtrado.columns:
                 df_filtrado = df_filtrado.drop_duplicates(subset=['Order ID', 'Product Name', 'Variation'])
-            
             df_filtrado.rename(columns={
-                'Tracking ID': 'PEDIDO',
-                'Seller SKU': 'SKU',
+                'Tracking ID': 'PEDIDO', 'Seller SKU': 'SKU',
                 'Product Name': 'NOMBRE_ORIGINAL', 'Variation': 'VARIACION',
                 'Quantity': 'CANTIDAD'
+            }, inplace=True)
+            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
+            
+        elif plataforma == 'SHEIN':
+            columnas_utiles = ['Número de pedido', 'SKU del vendedor', 'Nombre del producto', 'Especificación', 'Número de guía']
+            columnas_existentes = [col for col in columnas_utiles if col in df.columns]
+            df_filtrado = df[columnas_existentes].copy()
+            
+            # Shein no trae cantidad agrupada, cada fila es 1 pieza
+            df_filtrado['CANTIDAD'] = 1
+            
+            # Logica Híbrida: Usar Guía JMX si existe, si no, usar Pedido GSH
+            def get_shein_po(row):
+                guia = str(row.get('Número de guía', '')).strip()
+                if guia.startswith('JMX'):
+                    return guia
+                return str(row.get('Número de pedido', '')).strip()
+                
+            df_filtrado['PEDIDO_MATCH'] = df_filtrado.apply(get_shein_po, axis=1)
+            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['Número de pedido'].astype(str).str.strip()
+            
+            df_filtrado.rename(columns={
+                'PEDIDO_MATCH': 'PEDIDO', 'SKU del vendedor': 'SKU',
+                'Nombre del producto': 'NOMBRE_ORIGINAL', 'Especificación': 'VARIACION'
             }, inplace=True)
 
         df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
@@ -215,12 +247,12 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         worksheet.set_column('A:A', 20)
                         worksheet.set_column('B:B', 65)
 
-                        # --- TABLA INFERIOR (Orden Exacto de Guías restaurado) ---
+                        # --- TABLA INFERIOR (Orden Exacto mostrando el Número Oficial GSH/JMX/PO) ---
                         fila_orden = fin_t1 + 3
                         worksheet.write(fila_orden, 0, f"ORDEN EXACTO DE GUÍAS DE {emp.upper()}:", formato_titulo)
                         
-                        df_orden = df_emp[['PEDIDO', 'SKU', 'Nombre Correcto', 'CANTIDAD']].copy()
-                        df_orden.rename(columns={'CANTIDAD': 'Cant.'}, inplace=True)
+                        df_orden = df_emp[['PEDIDO_DISPLAY', 'SKU', 'Nombre Correcto', 'CANTIDAD']].copy()
+                        df_orden.rename(columns={'PEDIDO_DISPLAY': 'PEDIDO', 'CANTIDAD': 'Cant.'}, inplace=True)
                         df_orden.to_excel(writer, sheet_name=emp, index=False, startrow=fila_orden + 2, startcol=0)
                         
                         # ---------------------------------------------------------
@@ -228,11 +260,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         # ---------------------------------------------------------
                         hoja_ticket = writer.book.add_worksheet(f"{emp}_Ticket")
                         
-                        # Formatos dinámicos y con ajuste de texto (text_wrap)
                         fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
-                        # Nuevo formato exclusivo para el nombre (más grande)
                         fmt_titulo_ticket = writer.book.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
-                        
                         fmt_td_centro = writer.book.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
                         fmt_td_izq = writer.book.add_format({'border': 1, 'align': 'left', 'valign': 'vcenter', 'text_wrap': True})
                         fmt_total = writer.book.add_format({'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#D9D9D9'})
@@ -241,8 +270,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         num_division = i + 1
                         hoja_ticket.write('A1', f'DIVISION {num_division}', fmt_header)
                         hoja_ticket.write('D1', plataforma.upper(), fmt_header) 
-                        
-                        # AQUÍ ESTÁ EL CAMBIO: El nombre ahora es un título grande y centrado que abarca de la columna A a la D
                         hoja_ticket.merge_range('A2:D2', emp.upper(), fmt_titulo_ticket)
                         
                         encabezados = ['NO', 'SKU', 'NOMBRE COMUN', 'CANTI\nDAD']
@@ -269,15 +296,13 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         hoja_ticket.merge_range(fila, 1, fila, 2, 'Total general', fmt_total)
                         hoja_ticket.write(fila, 3, total_piezas, fmt_total)
                         
-                        # Medidas exactas de columnas
                         hoja_ticket.set_column('A:A', 4)
                         hoja_ticket.set_column('B:B', 16)
                         hoja_ticket.set_column('C:C', 38)
                         hoja_ticket.set_column('D:D', 6)
                         hoja_ticket.set_row(3, 30) 
-                        hoja_ticket.set_row(1, 25) # Darle más altura a la fila del Nombre para que luzca como título
+                        hoja_ticket.set_row(1, 25) 
                         
-                        # Ajustes de página para Impresora Térmica
                         hoja_ticket.fit_to_pages(1, 0) 
                         hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1) 
                         
@@ -294,13 +319,10 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         pdf_writer.write(pdf_buffer)
                         zip_file.writestr(f"Guias_{emp}.pdf", pdf_buffer.getvalue())
 
-            # Guardar el Excel en el ZIP
             zip_file.writestr("Reparticion_Automatizada.xlsx", excel_buffer.getvalue())
 
-        # Mantener en la memoria para que el botón de descarga no desaparezca
         st.session_state['descarga_lista'] = zip_buffer.getvalue()
 
-# Mostrar botón de descarga de manera permanente si ya se procesó
 if 'descarga_lista' in st.session_state:
     st.balloons()
     st.success("✨ ¡Todo listo! Se ha generado un archivo ZIP con el Excel de repartición y los PDFs individuales.")
