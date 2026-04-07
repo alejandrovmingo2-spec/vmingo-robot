@@ -167,7 +167,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
             st.error("❌ ERROR: Ningún pedido del PDF coincidió con el CSV.")
             st.stop()
 
-        # --- SE REINCORPORA EL ORDEN EXACTO DEL PDF ---
         df_ordenado['PEDIDO'] = pd.Categorical(df_ordenado['PEDIDO'], categories=lista_pos_unicos, ordered=True)
         df_ordenado = df_ordenado.sort_values('PEDIDO')
 
@@ -176,6 +175,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
         pos_base = len(lista_pos_unicos) // num_empleados
         sobrantes = len(lista_pos_unicos) % num_empleados
         cantidades_por_empleado = [pos_base + (1 if i < sobrantes else 0) for i in range(num_empleados)]
+
+        # Lista de colores para identificar cada división
+        colores_division = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD']
 
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
@@ -191,9 +193,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     df_emp = df_ordenado[df_ordenado['PEDIDO'].isin(pos_del_empleado)].copy()
                     
                     if not df_emp.empty:
+                        color_actual = colores_division[i % len(colores_division)]
+                        
                         # 1. Crear Pestañas Principales del Excel
                         worksheet = writer.book.add_worksheet(emp)
-                        formato_titulo = writer.book.add_format({'bold': True, 'font_size': 14, 'bg_color': '#D9D9D9', 'border': 1})
+                        formato_titulo = writer.book.add_format({'bold': True, 'font_size': 14, 'bg_color': color_actual, 'border': 1})
                         worksheet.write(0, 0, f"LISTA DE RECOLECCIÓN PARA: {emp.upper()}", formato_titulo)
                         worksheet.write(1, 0, f"Total de guías asignadas: {len(pos_del_empleado)}")
                         
@@ -220,15 +224,16 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         df_orden.to_excel(writer, sheet_name=emp, index=False, startrow=fila_orden + 2, startcol=0)
                         
                         # ---------------------------------------------------------
-                        # 2. CREAR LA HOJA DE TICKETS (Formato de tu Python Original)
+                        # 2. CREAR LA HOJA DE TICKETS (Formato para Térmica)
                         # ---------------------------------------------------------
                         hoja_ticket = writer.book.add_worksheet(f"{emp}_Ticket")
                         
-                        fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter'})
-                        fmt_td_centro = writer.book.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
-                        fmt_td_izq = writer.book.add_format({'border': 1, 'align': 'left', 'valign': 'vcenter'})
-                        fmt_total = writer.book.add_format({'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-                        fmt_wrap = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
+                        # Formatos dinámicos y con ajuste de texto (text_wrap)
+                        fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
+                        fmt_td_centro = writer.book.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
+                        fmt_td_izq = writer.book.add_format({'border': 1, 'align': 'left', 'valign': 'vcenter', 'text_wrap': True})
+                        fmt_total = writer.book.add_format({'bold': True, 'border': 1, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#D9D9D9'})
+                        fmt_wrap = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True, 'bg_color': color_actual, 'border': 1})
                         
                         num_division = i + 1
                         hoja_ticket.write('A1', f'DIVISION {num_division}', fmt_header)
@@ -259,12 +264,16 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         hoja_ticket.merge_range(fila, 1, fila, 2, 'Total general', fmt_total)
                         hoja_ticket.write(fila, 3, total_piezas, fmt_total)
                         
-                        # Medidas exactas de columnas como lo tenías localmente
+                        # Medidas exactas de columnas
                         hoja_ticket.set_column('A:A', 4)
                         hoja_ticket.set_column('B:B', 16)
                         hoja_ticket.set_column('C:C', 38)
                         hoja_ticket.set_column('D:D', 6)
                         hoja_ticket.set_row(3, 30) 
+                        
+                        # Ajustes de página para Impresora Térmica
+                        hoja_ticket.fit_to_pages(1, 0) # Forzar el contenido al ancho de 1 página
+                        hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1) # Reducir márgenes al mínimo
                         
                         # ---------------------------------------------------------
                         # 3. CREAR PDFs EN MEMORIA
