@@ -98,22 +98,54 @@ if st.button("🚀 Procesar Guías", type="primary"):
             if matches:
                 if plataforma == 'SHEIN':
                     gsh_matches = [m for m in matches if m.startswith('GSH')]
-                    po_encontrado = gsh_matches[0].strip() if gsh_matches else matches[0].strip()
-                else:
-                    po_encontrado = matches[0].strip()
+                    jmx_matches = [m for m in matches if m.startswith('JMX')]
                     
-                po_actual = po_encontrado 
-                
-                if po_actual not in paginas_por_po:
-                    paginas_por_po[po_actual] = []
-                    if plataforma == 'TEMU' and num_pagina > 0:
-                        if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
-                            paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
-                
-                if pagina not in paginas_por_po[po_actual]:
-                    paginas_por_po[po_actual].append(pagina)
+                    po_gsh = gsh_matches[0].strip() if gsh_matches else None
+                    po_jmx = jmx_matches[0].strip() if jmx_matches else None
+                    po_encontrado = po_gsh if po_gsh else po_jmx
+                    
+                    # FUSIÓN MAESTRA: Unir JMX y GSH físicamente al momento
+                    if 'DECLARACIÓN DE CONTENIDO' in texto and po_gsh:
+                        if po_actual and po_actual != po_gsh:
+                            if po_actual in paginas_por_po:
+                                paginas_viejas = paginas_por_po.pop(po_actual)
+                                if po_gsh in paginas_por_po:
+                                    paginas_por_po[po_gsh].extend(paginas_viejas)
+                                else:
+                                    paginas_por_po[po_gsh] = paginas_viejas
+                        po_actual = po_gsh
+                        
+                        if po_actual not in paginas_por_po:
+                            paginas_por_po[po_actual] = []
+                            # Rescatamos la hoja anterior si se perdió
+                            if num_pagina > 0 and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
+                                paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
+                                
+                        if pagina not in paginas_por_po[po_actual]:
+                            paginas_por_po[po_actual].append(pagina)
+                            
+                    else:
+                        # Es hoja de etiqueta normal
+                        po_actual = po_encontrado 
+                        if po_actual not in paginas_por_po:
+                            paginas_por_po[po_actual] = []
+                        if pagina not in paginas_por_po[po_actual]:
+                            paginas_por_po[po_actual].append(pagina)
+                else:
+                    # Temu y TikTok
+                    po_encontrado = matches[0].strip()
+                    po_actual = po_encontrado 
+                    
+                    if po_actual not in paginas_por_po:
+                        paginas_por_po[po_actual] = []
+                        if plataforma == 'TEMU' and num_pagina > 0:
+                            if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
+                                paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
+                    
+                    if pagina not in paginas_por_po[po_actual]:
+                        paginas_por_po[po_actual].append(pagina)
             else:
-                # LA MEMORIA PEGAJOSA: Si no hay código, es la continuación de la hoja anterior
+                # LA MEMORIA PEGAJOSA: Si es continuación de tabla y no hay código, lo engrapa al pedido anterior
                 if po_actual:
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
@@ -133,7 +165,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
         df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion)
         df.columns = df.columns.str.strip()
 
-        # --- CORRECCIÓN MAESTRA PARA SHEIN ---
+        # --- RETROSPECTIVA SHEIN (Renombrar JMX huérfanos a GSH) ---
         if plataforma == 'SHEIN':
             mapa_shein = {}
             for idx, row in df.iterrows():
@@ -145,7 +177,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
             paginas_corregidas = {}
             for po_key, paginas in paginas_por_po.items():
                 llave_final = po_key
-                # Renombrar los JMX a GSH
                 if po_key.startswith('JMX') and po_key in mapa_shein:
                     llave_final = mapa_shein[po_key]
                 
@@ -159,9 +190,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
             paginas_por_po = paginas_corregidas
 
         lista_pos_unicos = list(paginas_por_po.keys())
-        st.info(f"📄 Se encontraron {len(lista_pos_unicos)} pedidos agrupados en el PDF.")
 
-        # --- PREPARANDO DATOS ---
+        # --- PREPARANDO DATOS CSV ---
         if plataforma == 'TEMU':
             columnas_utiles = ['ID del pedido', 'sku de contribución', 'nombre del producto', 'variación', 'cantidad a enviar']
             df_filtrado = df[columnas_utiles].copy()
@@ -202,8 +232,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
         df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
         df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
         
+        # ESCUDOS
         df_filtrado['SKU'] = df_filtrado['SKU'].fillna('SIN SKU').astype(str)
-        
         df_filtrado['CANTIDAD'] = pd.to_numeric(df_filtrado['CANTIDAD'], errors='coerce').fillna(0)
         df_filtrado = df_filtrado[df_filtrado['CANTIDAD'] > 0]
 
@@ -217,9 +247,10 @@ if st.button("🚀 Procesar Guías", type="primary"):
         )
         df_filtrado['Nombre Correcto'] = df_filtrado['Nombre Correcto'].fillna('SIN NOMBRE').astype(str)
 
-        # --- FILTRANDO DATOS CON PDF ---
+        # --- FILTRANDO DATOS Y CALCULANDO CONTEO REAL ---
         filas_ordenadas = []
         indices_agregados = set()
+        pos_finales_reales = [] # Lista definitiva de pedidos 100% correctos
 
         for po in lista_pos_unicos:
             datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
@@ -228,6 +259,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 if not datos_po.empty:
                     filas_ordenadas.append(datos_po)
                     indices_agregados.update(datos_po.index)
+                    pos_finales_reales.append(po)
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
@@ -235,13 +267,16 @@ if st.button("🚀 Procesar Guías", type="primary"):
             st.error("❌ ERROR: Ningún pedido del PDF coincidió con el CSV.")
             st.stop()
 
-        df_ordenado['PEDIDO'] = pd.Categorical(df_ordenado['PEDIDO'], categories=lista_pos_unicos, ordered=True)
+        # El mensaje final ya no se engañará con hojas sueltas, solo mostrará el Match Real
+        st.info(f"📄 Se procesarán y empacarán {len(pos_finales_reales)} pedidos únicos.")
+
+        df_ordenado['PEDIDO'] = pd.Categorical(df_ordenado['PEDIDO'], categories=pos_finales_reales, ordered=True)
         df_ordenado = df_ordenado.sort_values('PEDIDO')
 
         # --- REPARTICIÓN Y CREACIÓN DE ARCHIVOS EN MEMORIA ---
         num_empleados = len(empleados)
-        pos_base = len(lista_pos_unicos) // num_empleados
-        sobrantes = len(lista_pos_unicos) % num_empleados
+        pos_base = len(pos_finales_reales) // num_empleados
+        sobrantes = len(pos_finales_reales) % num_empleados
         cantidades_por_empleado = [pos_base + (1 if i < sobrantes else 0) for i in range(num_empleados)]
 
         colores_division = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD']
@@ -254,7 +289,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 indice_inicio = 0
                 for i, emp in enumerate(empleados):
                     indice_fin = indice_inicio + cantidades_por_empleado[i]
-                    pos_del_empleado = lista_pos_unicos[indice_inicio:indice_fin]
+                    pos_del_empleado = pos_finales_reales[indice_inicio:indice_fin]
                     indice_inicio = indice_fin
                     
                     df_emp = df_ordenado[df_ordenado['PEDIDO'].isin(pos_del_empleado)].copy()
