@@ -97,46 +97,27 @@ if st.button("🚀 Procesar Guías", type="primary"):
             
             if matches:
                 if plataforma == 'SHEIN':
-                    jmx_matches = [m for m in matches if m.startswith('JMX')]
-                    po_encontrado = jmx_matches[0].strip() if jmx_matches else matches[0].strip()
-                    
-                    if 'DECLARACIÓN DE CONTENIDO' in texto:
-                        # La declaración SIEMPRE pertenece a la etiqueta que escaneamos justo antes
-                        if po_actual:
-                            if pagina not in paginas_por_po[po_actual]:
-                                paginas_por_po[po_actual].append(pagina)
-                        else:
-                            # Caso extremo: la primera hoja de todo el PDF es una declaración
-                            po_actual = po_encontrado
-                            paginas_por_po[po_actual] = [pagina]
-                    else:
-                        # Es una etiqueta de envío normal
-                        po_actual = po_encontrado
-                        if po_actual not in paginas_por_po:
-                            paginas_por_po[po_actual] = []
-                        if pagina not in paginas_por_po[po_actual]:
-                            paginas_por_po[po_actual].append(pagina)
+                    gsh_matches = [m for m in matches if m.startswith('GSH')]
+                    po_encontrado = gsh_matches[0].strip() if gsh_matches else matches[0].strip()
                 else:
                     po_encontrado = matches[0].strip()
-                    po_actual = po_encontrado 
                     
-                    if po_actual not in paginas_por_po:
-                        paginas_por_po[po_actual] = []
-                        if plataforma == 'TEMU' and num_pagina > 0:
-                            if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
-                                paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
-                    
-                    if pagina not in paginas_por_po[po_actual]:
-                        paginas_por_po[po_actual].append(pagina)
+                po_actual = po_encontrado 
+                
+                if po_actual not in paginas_por_po:
+                    paginas_por_po[po_actual] = []
+                    if plataforma == 'TEMU' and num_pagina > 0:
+                        if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
+                            paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
+                
+                if pagina not in paginas_por_po[po_actual]:
+                    paginas_por_po[po_actual].append(pagina)
             else:
                 if plataforma in ['TIKTOK', 'SHEIN'] and po_actual:
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
 
-        lista_pos_unicos = list(paginas_por_po.keys())
-        st.info(f"📄 Se encontraron {len(lista_pos_unicos)} pedidos en el PDF.")
-
-        # --- CRUZANDO CON CSV ---
+        # --- LEYENDO CSV ---
         texto_csv = archivo_csv.getvalue().decode(codificacion)
         lineas = texto_csv.splitlines()
         skip_lineas = 0
@@ -151,6 +132,35 @@ if st.button("🚀 Procesar Guías", type="primary"):
         df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion)
         df.columns = df.columns.str.strip()
 
+        # --- CORRECCIÓN MAESTRA PARA SHEIN ---
+        if plataforma == 'SHEIN':
+            mapa_shein = {}
+            for idx, row in df.iterrows():
+                gsh = str(row.get('Número de pedido', '')).strip()
+                jmx = str(row.get('Número de guía', '')).strip()
+                if jmx and jmx != 'nan' and gsh and gsh != 'nan':
+                    mapa_shein[jmx] = gsh
+            
+            paginas_corregidas = {}
+            for po_key, paginas in paginas_por_po.items():
+                llave_final = po_key
+                # Si el PDF leyó un JMX, lo renombramos a su GSH oficial consultando el CSV
+                if po_key.startswith('JMX') and po_key in mapa_shein:
+                    llave_final = mapa_shein[po_key]
+                
+                if llave_final not in paginas_corregidas:
+                    paginas_corregidas[llave_final] = []
+                
+                for pag in paginas:
+                    if pag not in paginas_corregidas[llave_final]:
+                        paginas_corregidas[llave_final].append(pag)
+            
+            paginas_por_po = paginas_corregidas
+
+        lista_pos_unicos = list(paginas_por_po.keys())
+        st.info(f"📄 Se encontraron {len(lista_pos_unicos)} pedidos agrupados en el PDF.")
+
+        # --- PREPARANDO DATOS ---
         if plataforma == 'TEMU':
             columnas_utiles = ['ID del pedido', 'sku de contribución', 'nombre del producto', 'variación', 'cantidad a enviar']
             df_filtrado = df[columnas_utiles].copy()
@@ -175,26 +185,25 @@ if st.button("🚀 Procesar Guías", type="primary"):
             df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
             
         elif plataforma == 'SHEIN':
-            columnas_utiles = ['Número de pedido', 'SKU del vendedor', 'Nombre del producto', 'Especificación', 'Número de guía']
+            columnas_utiles = ['Número de pedido', 'SKU del vendedor', 'Nombre del producto', 'Especificación']
             columnas_existentes = [col for col in columnas_utiles if col in df.columns]
             df_filtrado = df[columnas_existentes].copy()
             
             df_filtrado['CANTIDAD'] = 1
-            df_filtrado['Número de guía'] = df_filtrado['Número de guía'].fillna('').astype(str).str.strip()
-            df_filtrado['Número de pedido'] = df_filtrado['Número de pedido'].fillna('').astype(str).str.strip()
-            
-            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['Número de pedido']
-            df_filtrado['PEDIDO'] = '' 
+            df_filtrado['PEDIDO'] = df_filtrado['Número de pedido'].astype(str).str.strip()
+            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
             
             df_filtrado.rename(columns={
                 'SKU del vendedor': 'SKU',
                 'Nombre del producto': 'NOMBRE_ORIGINAL', 'Especificación': 'VARIACION'
             }, inplace=True)
 
-        if plataforma != 'SHEIN':
-            df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
-            df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
-            
+        df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
+        df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
+        
+        # ESCUDO PARA BELÉN: Rellenar vacíos para que no desaparezcan del ticket
+        df_filtrado['SKU'] = df_filtrado['SKU'].fillna('SIN SKU').astype(str)
+        
         df_filtrado['CANTIDAD'] = pd.to_numeric(df_filtrado['CANTIDAD'], errors='coerce').fillna(0)
         df_filtrado = df_filtrado[df_filtrado['CANTIDAD'] > 0]
 
@@ -206,25 +215,14 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 )
             ), axis=1
         )
+        df_filtrado['Nombre Correcto'] = df_filtrado['Nombre Correcto'].fillna('SIN NOMBRE').astype(str)
 
+        # --- FILTRANDO DATOS CON PDF ---
         filas_ordenadas = []
-        indices_agregados = set() # Memoria anti-duplicados
-
         for po in lista_pos_unicos:
-            if plataforma == 'SHEIN':
-                # Visión doble: Busca coincidencia exacta en Guía o en Pedido
-                mask = (df_filtrado['Número de guía'] == po) | (df_filtrado['Número de pedido'] == po)
-                datos_po = df_filtrado[mask].copy()
-            else:
-                datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
-                
+            datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
             if not datos_po.empty:
-                # Bloquea las filas que ya fueron agregadas antes
-                datos_po = datos_po[~datos_po.index.isin(indices_agregados)]
-                if not datos_po.empty:
-                    datos_po['PEDIDO'] = po 
-                    filas_ordenadas.append(datos_po)
-                    indices_agregados.update(datos_po.index)
+                filas_ordenadas.append(datos_po)
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
