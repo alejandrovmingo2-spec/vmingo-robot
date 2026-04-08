@@ -113,7 +113,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 if pagina not in paginas_por_po[po_actual]:
                     paginas_por_po[po_actual].append(pagina)
             else:
-                if plataforma in ['TIKTOK', 'SHEIN'] and po_actual:
+                # LA MEMORIA PEGAJOSA: Si no hay código, es la continuación de la hoja anterior
+                if po_actual:
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
 
@@ -144,7 +145,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
             paginas_corregidas = {}
             for po_key, paginas in paginas_por_po.items():
                 llave_final = po_key
-                # Si el PDF leyó un JMX, lo renombramos a su GSH oficial consultando el CSV
+                # Renombrar los JMX a GSH
                 if po_key.startswith('JMX') and po_key in mapa_shein:
                     llave_final = mapa_shein[po_key]
                 
@@ -201,7 +202,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
         df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
         df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
         
-        # ESCUDO PARA BELÉN: Rellenar vacíos para que no desaparezcan del ticket
         df_filtrado['SKU'] = df_filtrado['SKU'].fillna('SIN SKU').astype(str)
         
         df_filtrado['CANTIDAD'] = pd.to_numeric(df_filtrado['CANTIDAD'], errors='coerce').fillna(0)
@@ -219,10 +219,15 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
         # --- FILTRANDO DATOS CON PDF ---
         filas_ordenadas = []
+        indices_agregados = set()
+
         for po in lista_pos_unicos:
             datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
             if not datos_po.empty:
-                filas_ordenadas.append(datos_po)
+                datos_po = datos_po[~datos_po.index.isin(indices_agregados)]
+                if not datos_po.empty:
+                    filas_ordenadas.append(datos_po)
+                    indices_agregados.update(datos_po.index)
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
