@@ -104,8 +104,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     po_jmx = jmx_matches[0].strip() if jmx_matches else None
                     po_encontrado = po_gsh if po_gsh else po_jmx
                     
-                    # FUSIÓN MAESTRA: Unir JMX y GSH físicamente al momento
-                    if 'DECLARACIÓN DE CONTENIDO' in texto and po_gsh:
+                    # FUSIÓN MAESTRA INFALIBLE: Si vemos un GSH, lo anclamos.
+                    if po_gsh:
                         if po_actual and po_actual != po_gsh:
                             if po_actual in paginas_por_po:
                                 paginas_viejas = paginas_por_po.pop(po_actual)
@@ -117,7 +117,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         
                         if po_actual not in paginas_por_po:
                             paginas_por_po[po_actual] = []
-                            # Rescatamos la hoja anterior si se perdió
+                            # Rescatamos la hoja anterior si nos faltó
                             if num_pagina > 0 and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
                                 paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
                                 
@@ -125,14 +125,14 @@ if st.button("🚀 Procesar Guías", type="primary"):
                             paginas_por_po[po_actual].append(pagina)
                             
                     else:
-                        # Es hoja de etiqueta normal
+                        # Si es solo una etiqueta JMX
                         po_actual = po_encontrado 
                         if po_actual not in paginas_por_po:
                             paginas_por_po[po_actual] = []
                         if pagina not in paginas_por_po[po_actual]:
                             paginas_por_po[po_actual].append(pagina)
                 else:
-                    # Temu y TikTok
+                    # TEMU y TIKTOK intactos
                     po_encontrado = matches[0].strip()
                     po_actual = po_encontrado 
                     
@@ -145,7 +145,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
             else:
-                # LA MEMORIA PEGAJOSA: Si es continuación de tabla y no hay código, lo engrapa al pedido anterior
+                # Memoria Pegajosa: para hojas en blanco o continuaciones de tablas largas
                 if po_actual:
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
@@ -165,7 +165,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
         df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion)
         df.columns = df.columns.str.strip()
 
-        # --- RETROSPECTIVA SHEIN (Renombrar JMX huérfanos a GSH) ---
+        # --- RETROSPECTIVA SHEIN (Ayuda para PDFs sin GSH) ---
         if plataforma == 'SHEIN':
             mapa_shein = {}
             for idx, row in df.iterrows():
@@ -200,7 +200,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 'nombre del producto': 'NOMBRE_ORIGINAL', 'variación': 'VARIACION',
                 'cantidad a enviar': 'CANTIDAD'
             }, inplace=True)
-            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
             
         elif plataforma == 'TIKTOK':
             columnas_utiles = ['Order ID', 'Seller SKU', 'Product Name', 'Variation', 'Quantity', 'Tracking ID']
@@ -213,26 +212,24 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 'Product Name': 'NOMBRE_ORIGINAL', 'Variation': 'VARIACION',
                 'Quantity': 'CANTIDAD'
             }, inplace=True)
-            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
             
         elif plataforma == 'SHEIN':
-            columnas_utiles = ['Número de pedido', 'SKU del vendedor', 'Nombre del producto', 'Especificación']
+            columnas_utiles = ['Número de pedido', 'SKU del vendedor', 'Nombre del producto', 'Especificación', 'Número de guía']
             columnas_existentes = [col for col in columnas_utiles if col in df.columns]
             df_filtrado = df[columnas_existentes].copy()
             
             df_filtrado['CANTIDAD'] = 1
             df_filtrado['PEDIDO'] = df_filtrado['Número de pedido'].astype(str).str.strip()
-            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
+            df_filtrado['GUIA'] = df_filtrado.get('Número de guía', pd.Series(dtype=str)).fillna('').astype(str).str.strip()
             
             df_filtrado.rename(columns={
                 'SKU del vendedor': 'SKU',
                 'Nombre del producto': 'NOMBRE_ORIGINAL', 'Especificación': 'VARIACION'
             }, inplace=True)
 
+        # Escudos Anti-Fantasmas (Para que ninguna fila desaparezca en el Ticket)
         df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
         df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
-        
-        # ESCUDOS
         df_filtrado['SKU'] = df_filtrado['SKU'].fillna('SIN SKU').astype(str)
         df_filtrado['CANTIDAD'] = pd.to_numeric(df_filtrado['CANTIDAD'], errors='coerce').fillna(0)
         df_filtrado = df_filtrado[df_filtrado['CANTIDAD'] > 0]
@@ -247,19 +244,38 @@ if st.button("🚀 Procesar Guías", type="primary"):
         )
         df_filtrado['Nombre Correcto'] = df_filtrado['Nombre Correcto'].fillna('SIN NOMBRE').astype(str)
 
-        # --- FILTRANDO DATOS Y CALCULANDO CONTEO REAL ---
+        # --- FILTRANDO DATOS Y CALCULANDO CONTEO REAL (RED DE SEGURIDAD ABSOLUTA) ---
         filas_ordenadas = []
         indices_agregados = set()
         pos_finales_reales = [] # Lista definitiva de pedidos 100% correctos
 
         for po in lista_pos_unicos:
-            datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
+            if plataforma == 'SHEIN':
+                # Visión Doble: Atrapamos el pedido ya sea por GSH o por JMX
+                mask = (df_filtrado['PEDIDO'] == po) | ((df_filtrado['GUIA'] == po) & (df_filtrado['GUIA'] != '') & (df_filtrado['GUIA'] != 'nan'))
+                datos_po = df_filtrado[mask].copy()
+            else:
+                datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
+                
             if not datos_po.empty:
                 datos_po = datos_po[~datos_po.index.isin(indices_agregados)]
                 if not datos_po.empty:
+                    # Estandarizamos para que el PDF y el CSV se llamen igual (Evita clones)
+                    oficial_pedido = datos_po.iloc[0]['PEDIDO']
+                    datos_po['PEDIDO'] = oficial_pedido
+                    datos_po['PEDIDO_DISPLAY'] = oficial_pedido
+                    
+                    if po != oficial_pedido:
+                        if oficial_pedido not in paginas_por_po:
+                            paginas_por_po[oficial_pedido] = []
+                        for pag in paginas_por_po.get(po, []):
+                            if pag not in paginas_por_po[oficial_pedido]:
+                                paginas_por_po[oficial_pedido].append(pag)
+                                
                     filas_ordenadas.append(datos_po)
                     indices_agregados.update(datos_po.index)
-                    pos_finales_reales.append(po)
+                    if oficial_pedido not in pos_finales_reales:
+                        pos_finales_reales.append(oficial_pedido)
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
@@ -267,7 +283,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
             st.error("❌ ERROR: Ningún pedido del PDF coincidió con el CSV.")
             st.stop()
 
-        # El mensaje final ya no se engañará con hojas sueltas, solo mostrará el Match Real
+        # El conteo exacto que coincidirá con tu Excel 
         st.info(f"📄 Se procesarán y empacarán {len(pos_finales_reales)} pedidos únicos.")
 
         df_ordenado['PEDIDO'] = pd.Categorical(df_ordenado['PEDIDO'], categories=pos_finales_reales, ordered=True)
@@ -396,11 +412,12 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
 if 'descarga_lista' in st.session_state:
     st.balloons()
-    st.success("✨ ¡Todo listo! Se ha generado un archivo ZIP con el Excel de repartición y los PDFs individuales.")
     
     plat = st.session_state.get('plataforma_procesada', 'Vmingo')
     fecha = datetime.now().strftime("%d-%m-%Y")
     nombre_archivo = f"Guias_{plat}_{fecha}.zip"
+    
+    st.success(f"✨ ¡Todo listo! Se ha generado el archivo {nombre_archivo} con el Excel de repartición y los PDFs individuales.")
     
     st.download_button(
         label=f"📦 Descargar {nombre_archivo}",
