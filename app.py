@@ -96,30 +96,28 @@ if st.button("🚀 Procesar Guías", type="primary"):
             matches = re.findall(patron_pdf, texto) if texto else []
             
             if matches:
-                po_encontrado = str(matches[0]).strip()
-                
-                # CORRECCIÓN PARA SHEIN: Evitar borrar páginas de paquetes múltiples
-                if plataforma == 'SHEIN' and 'DECLARACIÓN DE CONTENIDO' in texto:
-                    if po_actual and po_actual != po_encontrado:
-                        if po_actual in paginas_por_po:
-                            paginas_viejas = paginas_por_po.pop(po_actual)
-                            # AQUÍ ESTÁ EL ARREGLO: 'extend' en lugar de '=' para sumar los paquetes sin borrarlos
-                            if po_encontrado in paginas_por_po:
-                                paginas_por_po[po_encontrado].extend(paginas_viejas)
-                            else:
-                                paginas_por_po[po_encontrado] = paginas_viejas
-                                
-                    po_actual = po_encontrado
+                if plataforma == 'SHEIN':
+                    jmx_matches = [m for m in matches if m.startswith('JMX')]
+                    po_encontrado = jmx_matches[0].strip() if jmx_matches else matches[0].strip()
                     
-                    if po_actual not in paginas_por_po:
-                        paginas_por_po[po_actual] = []
-                        if num_pagina > 0 and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
-                            paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
-                            
-                    if pagina not in paginas_por_po[po_actual]:
-                        paginas_por_po[po_actual].append(pagina)
-                        
+                    if 'DECLARACIÓN DE CONTENIDO' in texto:
+                        # La declaración SIEMPRE pertenece a la etiqueta que escaneamos justo antes
+                        if po_actual:
+                            if pagina not in paginas_por_po[po_actual]:
+                                paginas_por_po[po_actual].append(pagina)
+                        else:
+                            # Caso extremo: la primera hoja de todo el PDF es una declaración
+                            po_actual = po_encontrado
+                            paginas_por_po[po_actual] = [pagina]
+                    else:
+                        # Es una etiqueta de envío normal
+                        po_actual = po_encontrado
+                        if po_actual not in paginas_por_po:
+                            paginas_por_po[po_actual] = []
+                        if pagina not in paginas_por_po[po_actual]:
+                            paginas_por_po[po_actual].append(pagina)
                 else:
+                    po_encontrado = matches[0].strip()
                     po_actual = po_encontrado 
                     
                     if po_actual not in paginas_por_po:
@@ -182,23 +180,21 @@ if st.button("🚀 Procesar Guías", type="primary"):
             df_filtrado = df[columnas_existentes].copy()
             
             df_filtrado['CANTIDAD'] = 1
+            df_filtrado['Número de guía'] = df_filtrado['Número de guía'].fillna('').astype(str).str.strip()
+            df_filtrado['Número de pedido'] = df_filtrado['Número de pedido'].fillna('').astype(str).str.strip()
             
-            def get_shein_po(row):
-                guia = str(row.get('Número de guía', '')).strip()
-                if guia.startswith('JMX'):
-                    return guia
-                return str(row.get('Número de pedido', '')).strip()
-                
-            df_filtrado['PEDIDO_MATCH'] = df_filtrado.apply(get_shein_po, axis=1)
-            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['Número de pedido'].astype(str).str.strip()
+            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['Número de pedido']
+            df_filtrado['PEDIDO'] = '' 
             
             df_filtrado.rename(columns={
-                'PEDIDO_MATCH': 'PEDIDO', 'SKU del vendedor': 'SKU',
+                'SKU del vendedor': 'SKU',
                 'Nombre del producto': 'NOMBRE_ORIGINAL', 'Especificación': 'VARIACION'
             }, inplace=True)
 
-        df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
-        df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
+        if plataforma != 'SHEIN':
+            df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
+            df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
+            
         df_filtrado['CANTIDAD'] = pd.to_numeric(df_filtrado['CANTIDAD'], errors='coerce').fillna(0)
         df_filtrado = df_filtrado[df_filtrado['CANTIDAD'] > 0]
 
@@ -212,10 +208,23 @@ if st.button("🚀 Procesar Guías", type="primary"):
         )
 
         filas_ordenadas = []
+        indices_agregados = set() # Memoria anti-duplicados
+
         for po in lista_pos_unicos:
-            datos_po = df_filtrado[df_filtrado['PEDIDO'] == po]
+            if plataforma == 'SHEIN':
+                # Visión doble: Busca coincidencia exacta en Guía o en Pedido
+                mask = (df_filtrado['Número de guía'] == po) | (df_filtrado['Número de pedido'] == po)
+                datos_po = df_filtrado[mask].copy()
+            else:
+                datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
+                
             if not datos_po.empty:
-                filas_ordenadas.append(datos_po)
+                # Bloquea las filas que ya fueron agregadas antes
+                datos_po = datos_po[~datos_po.index.isin(indices_agregados)]
+                if not datos_po.empty:
+                    datos_po['PEDIDO'] = po 
+                    filas_ordenadas.append(datos_po)
+                    indices_agregados.update(datos_po.index)
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
@@ -270,11 +279,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         worksheet.set_column('A:A', 20)
                         worksheet.set_column('B:B', 65)
 
-                        # --- TABLA INFERIOR (Orden Exacto mostrando el Número Oficial GSH/JMX/PO) ---
+                        # --- TABLA INFERIOR (Agrupada para evitar "guías repetidas" visuales) ---
                         fila_orden = fin_t1 + 3
                         worksheet.write(fila_orden, 0, f"ORDEN EXACTO DE GUÍAS DE {emp.upper()}:", formato_titulo)
                         
-                        df_orden = df_emp[['PEDIDO_DISPLAY', 'SKU', 'Nombre Correcto', 'CANTIDAD']].copy()
+                        df_orden = df_emp.groupby(['PEDIDO_DISPLAY', 'SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
                         df_orden.rename(columns={'PEDIDO_DISPLAY': 'PEDIDO', 'CANTIDAD': 'Cant.'}, inplace=True)
                         df_orden.to_excel(writer, sheet_name=emp, index=False, startrow=fila_orden + 2, startcol=0)
                         
@@ -344,7 +353,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
             zip_file.writestr("Reparticion_Automatizada.xlsx", excel_buffer.getvalue())
 
-        # Guardamos la descarga y el nombre de la plataforma en la memoria
         st.session_state['descarga_lista'] = zip_buffer.getvalue()
         st.session_state['plataforma_procesada'] = plataforma
 
