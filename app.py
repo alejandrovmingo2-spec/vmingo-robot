@@ -164,12 +164,16 @@ if st.button("🚀 Procesar Guías", type="primary"):
             col_sku = cols_map.get('sku del vendedor')
             col_nombre = cols_map.get('nombre del producto')
             col_var = cols_map.get('especificación', cols_map.get('especificacion'))
+            col_jmx = cols_map.get('número de guía', cols_map.get('numero de guia')) # RESTAURADO PARA SHEIN
             
-            columnas_utiles = [c for c in [col_pedido, col_sku, col_nombre, col_var] if c]
+            columnas_utiles = [c for c in [col_pedido, col_sku, col_nombre, col_var, col_jmx] if c]
             df_filtrado = df[columnas_utiles].copy()
             
             df_filtrado['CANTIDAD'] = 1
             if col_pedido: df_filtrado['PEDIDO'] = df_filtrado[col_pedido].astype(str).str.strip()
+            
+            # RESTAURADO: Visión Doble para Shein
+            df_filtrado['GUIA'] = df_filtrado.get(col_jmx, pd.Series(dtype=str)).fillna('').astype(str).str.strip() if col_jmx else ''
             
             rename_dict = {}
             if col_sku: rename_dict[col_sku] = 'SKU'
@@ -291,10 +295,26 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
         # --- 3. PREPARANDO DATA FINAL Y EXCEL ---
         filas_ordenadas = []
+        indices_agregados = set() # RESTAURADO: Evita duplicar el mismo pedido al cruzar
+        
         for po in pos_finales_reales:
-            datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
+            if plataforma == 'SHEIN':
+                # RESTAURADO: La Visión Doble para Shein (Busca por GSH o por JMX)
+                mask = (df_filtrado['PEDIDO'] == po) | ((df_filtrado['GUIA'] == po) & (df_filtrado['GUIA'] != '') & (df_filtrado['GUIA'] != 'nan'))
+                datos_po = df_filtrado[mask].copy()
+            else:
+                datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
+                
             if not datos_po.empty:
-                filas_ordenadas.append(datos_po)
+                datos_po = datos_po[~datos_po.index.isin(indices_agregados)]
+                if not datos_po.empty:
+                    # Estandarizamos para que el PDF y el CSV se llamen igual
+                    oficial_pedido = datos_po.iloc[0]['PEDIDO']
+                    datos_po['PEDIDO'] = oficial_pedido
+                    datos_po['PEDIDO_DISPLAY'] = oficial_pedido
+                    
+                    filas_ordenadas.append(datos_po)
+                    indices_agregados.update(datos_po.index)
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
