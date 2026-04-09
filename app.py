@@ -79,7 +79,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
             except Exception as e:
                 st.warning(f"⚠️ Hubo un detalle al leer tu hoja BASE: {e}")
 
-        # --- 1. LEYENDO CSV PRIMERO PARA CREAR EL MAPA MAESTRO ---
+        # --- 1. LEYENDO CSV PRIMERO ---
         texto_csv = archivo_csv.getvalue().decode(codificacion)
         lineas = texto_csv.splitlines()
         skip_lineas = 0
@@ -97,31 +97,20 @@ if st.button("🚀 Procesar Guías", type="primary"):
         # Mapeo robusto de columnas sin importar mayúsculas
         cols_map = {c.lower().strip(): c for c in df.columns}
 
-        # Diccionario infalible (Une JMX/Tracking con el Pedido Oficial)
-        mapa_pedidos = {}
-        if plataforma == 'SHEIN':
-            col_gsh = cols_map.get('número de pedido', cols_map.get('numero de pedido'))
-            col_jmx = cols_map.get('número de guía', cols_map.get('numero de guia'))
-            for idx, row in df.iterrows():
-                gsh = str(row.get(col_gsh, '')).replace('.0', '').strip() if col_gsh else ''
-                jmx = str(row.get(col_jmx, '')).replace('.0', '').strip() if col_jmx else ''
-                if gsh and gsh != 'nan':
-                    mapa_pedidos[gsh] = gsh
-                if jmx and jmx != 'nan':
-                    mapa_pedidos[jmx] = gsh
-                    
-        elif plataforma == 'TIKTOK':
+        # DICCIONARIO (Solo necesario para TikTok)
+        mapa_pedidos_tiktok = {}
+        if plataforma == 'TIKTOK':
             col_order = cols_map.get('order id')
             col_track = cols_map.get('tracking id')
             for idx, row in df.iterrows():
                 order_id = str(row.get(col_order, '')).replace('.0', '').strip() if col_order else ''
                 tracking_id = str(row.get(col_track, '')).replace('.0', '').strip() if col_track else ''
                 if order_id and order_id != 'nan':
-                    mapa_pedidos[order_id] = order_id
+                    mapa_pedidos_tiktok[order_id] = order_id
                 if tracking_id and tracking_id != 'nan':
-                    mapa_pedidos[tracking_id] = order_id
+                    mapa_pedidos_tiktok[tracking_id] = order_id
 
-        # Limpieza y filtrado del CSV Inteligente
+        # LIMPIEZA Y FILTRADO DEL CSV DEPENDIENDO LA PLATAFORMA
         if plataforma == 'TEMU':
             col_pedido = cols_map.get('id del pedido')
             col_sku = cols_map.get('sku de contribución')
@@ -164,16 +153,12 @@ if st.button("🚀 Procesar Guías", type="primary"):
             col_sku = cols_map.get('sku del vendedor')
             col_nombre = cols_map.get('nombre del producto')
             col_var = cols_map.get('especificación', cols_map.get('especificacion'))
-            col_jmx = cols_map.get('número de guía', cols_map.get('numero de guia')) # RESTAURADO PARA SHEIN
             
-            columnas_utiles = [c for c in [col_pedido, col_sku, col_nombre, col_var, col_jmx] if c]
+            columnas_utiles = [c for c in [col_pedido, col_sku, col_nombre, col_var] if c]
             df_filtrado = df[columnas_utiles].copy()
             
             df_filtrado['CANTIDAD'] = 1
             if col_pedido: df_filtrado['PEDIDO'] = df_filtrado[col_pedido].astype(str).str.strip()
-            
-            # RESTAURADO: Visión Doble para Shein
-            df_filtrado['GUIA'] = df_filtrado.get(col_jmx, pd.Series(dtype=str)).fillna('').astype(str).str.strip() if col_jmx else ''
             
             rename_dict = {}
             if col_sku: rename_dict[col_sku] = 'SKU'
@@ -181,7 +166,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
             if col_var: rename_dict[col_var] = 'VARIACION'
             df_filtrado.rename(columns=rename_dict, inplace=True)
 
-        # Escudos Anti-Crash
         if 'PEDIDO' not in df_filtrado.columns:
             st.error("❌ ERROR: No se encontró la columna de Número de Pedido en el CSV.")
             st.stop()
@@ -204,25 +188,30 @@ if st.button("🚀 Procesar Guías", type="primary"):
         )
         df_filtrado['Nombre Correcto'] = df_filtrado['Nombre Correcto'].fillna('SIN NOMBRE').astype(str)
 
-        # Extraemos las órdenes únicas directamente del CSV
+        # EL ORDEN SAGRADO DEL CSV (Lista única de pedidos tal como vienen exportados)
         pos_finales_reales = list(dict.fromkeys(df_filtrado['PEDIDO'].tolist()))
 
-        # --- 2. LEYENDO PDF ---
+        # --- 2. LEYENDO PDF (3 CEREBROS INDEPENDIENTES) ---
         paginas_por_po = {}
         reader = PyPDF2.PdfReader(archivo_pdf)
         
+        # === CEREBRO 1: SHEIN (Código exacto proporcionado, sin búsquedas) ===
         if plataforma == 'SHEIN':
             chunks_pdf = []
             chunk_actual = []
+            hubo_largos = False
 
             for num_pagina, pagina in enumerate(reader.pages):
                 texto = pagina.extract_text() or ""
                 texto_upper = texto.upper()
+
                 es_declaracion = 'DECLARACIÓN DE CONTENIDO' in texto_upper
                 tiene_indicadores = re.search(r'(JMX|GSH|J&T|TODOOR|D2D)', texto_upper)
 
                 if tiene_indicadores and not es_declaracion:
                     if chunk_actual:
+                        if len(chunk_actual) > 2:
+                            hubo_largos = True
                         chunks_pdf.append(chunk_actual)
                     chunk_actual = [pagina]
                 else:
@@ -230,31 +219,29 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         chunk_actual.append(pagina)
                     else:
                         chunk_actual = [pagina]
+
             if chunk_actual:
+                if len(chunk_actual) > 2:
+                    hubo_largos = True
                 chunks_pdf.append(chunk_actual)
 
-            for bloque in chunks_pdf:
-                llave_bloque = None
-                for pag in bloque:
-                    texto_pag = pag.extract_text() or ""
-                    matches = re.findall(r'(JMX\d+|GSH\w+)', texto_pag.upper())
-                    if matches:
-                        gsh_matches = [m for m in matches if m.startswith('GSH')]
-                        if gsh_matches:
-                            llave_bloque = gsh_matches[0].strip()
-                            break 
-                        elif not llave_bloque:
-                            llave_bloque = matches[0].strip() 
-                
-                if llave_bloque:
-                    official_gsh = mapa_pedidos.get(llave_bloque, llave_bloque)
-                    if official_gsh not in paginas_por_po:
-                        paginas_por_po[official_gsh] = []
-                    paginas_por_po[official_gsh].extend(bloque)
-                    
-        else:
-            # LÓGICA ORIGINAL RESTAURADA EXACTAMENTE PARA TEMU Y TIKTOK
-            patron_pdf = r'(PO-\d{3}-\d+)' if plataforma == 'TEMU' else r'(JMX\d+)'
+            num_pedidos_csv = len(pos_finales_reales)
+            num_bloques_pdf = len(chunks_pdf)
+
+            if num_bloques_pdf != num_pedidos_csv:
+                st.error(f"🚨 ALERTA CRÍTICA DE DESFASE: El Excel dice que hay {num_pedidos_csv} pedidos, pero el robot contó {num_bloques_pdf} guías en el PDF. Revisa si hay pedidos cancelados.")
+            elif hubo_largos:
+                st.info("💡 NOTA: Se detectaron pedidos con más de 2 páginas. El robot absorbió las páginas extra automáticamente.")
+
+            for i, pedido_gsh in enumerate(pos_finales_reales):
+                if i < num_bloques_pdf:
+                    paginas_por_po[pedido_gsh] = chunks_pdf[i]
+                else:
+                    paginas_por_po[pedido_gsh] = []
+
+        # === CEREBRO 2: TEMU (Python original estricto) ===
+        elif plataforma == 'TEMU':
+            patron_pdf = r'(PO-\d{3}-\d+)'
             po_actual = None 
             
             for num_pagina, pagina in enumerate(reader.pages):
@@ -262,59 +249,65 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 matches = re.findall(patron_pdf, texto)
                 
                 if matches:
-                    po_encontrado = matches[0].strip()
+                    po_encontrado = str(matches[0]).strip()
                     po_actual = po_encontrado 
                     
                     if po_actual not in paginas_por_po:
                         paginas_por_po[po_actual] = []
-                        if plataforma == 'TEMU' and num_pagina > 0:
+                        if num_pagina > 0:
                             if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
                                 paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
                     
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
                 else:
-                    if plataforma == 'TIKTOK' and po_actual:
+                    # En Temu, si no hace match (hojas extras sueltas), se ignora exactamente como en el script
+                    pass
+
+        # === CEREBRO 3: TIKTOK (Robot Bueno con Diccionario) ===
+        elif plataforma == 'TIKTOK':
+            patron_pdf = r'(JMX\d+)'
+            po_actual = None 
+            
+            for num_pagina, pagina in enumerate(reader.pages):
+                texto = pagina.extract_text() or ""
+                matches = re.findall(patron_pdf, texto)
+                
+                if matches:
+                    po_encontrado = str(matches[0]).strip()
+                    po_actual = po_encontrado 
+                    
+                    if po_actual not in paginas_por_po:
+                        paginas_por_po[po_actual] = []
+                    
+                    if pagina not in paginas_por_po[po_actual]:
+                        paginas_por_po[po_actual].append(pagina)
+                else:
+                    if po_actual:
                         if pagina not in paginas_por_po[po_actual]:
                             paginas_por_po[po_actual].append(pagina)
 
-            if plataforma == 'TIKTOK':
-                paginas_corregidas = {}
-                for po_key, paginas in paginas_por_po.items():
-                    llave_final = mapa_pedidos.get(po_key, po_key)
-                    if llave_final not in paginas_corregidas:
-                        paginas_corregidas[llave_final] = []
-                    for pag in paginas:
-                        if pag not in paginas_corregidas[llave_final]:
-                            paginas_corregidas[llave_final].append(pag)
-                paginas_por_po = paginas_corregidas
+            # Cruce de JMX a Order ID para TikTok
+            paginas_corregidas = {}
+            for jmx_key, paginas in paginas_por_po.items():
+                order_id = mapa_pedidos_tiktok.get(jmx_key, jmx_key)
+                if order_id not in paginas_corregidas:
+                    paginas_corregidas[order_id] = []
+                for pag in paginas:
+                    if pag not in paginas_corregidas[order_id]:
+                        paginas_corregidas[order_id].append(pag)
+            paginas_por_po = paginas_corregidas
             
-        # Filtramos la lista maestra para empacar SOLO lo que se encontró físicamente en el PDF
+        # Filtramos la lista maestra de CSV basándonos en lo que se armó en los PDFs
         lista_pos_pdf = list(paginas_por_po.keys())
         pos_finales_reales = [po for po in pos_finales_reales if po in lista_pos_pdf]
 
         # --- 3. PREPARANDO DATA FINAL Y EXCEL ---
         filas_ordenadas = []
-        indices_agregados = set() # RESTAURADO: Evita duplicar el mismo pedido al cruzar
-        
         for po in pos_finales_reales:
-            if plataforma == 'SHEIN':
-                # RESTAURADO: La Visión Doble para Shein (Busca por GSH o por JMX)
-                mask = (df_filtrado['PEDIDO'] == po) | ((df_filtrado['GUIA'] == po) & (df_filtrado['GUIA'] != '') & (df_filtrado['GUIA'] != 'nan'))
-                datos_po = df_filtrado[mask].copy()
-            else:
-                datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
-                
+            datos_po = df_filtrado[df_filtrado['PEDIDO'] == po].copy()
             if not datos_po.empty:
-                datos_po = datos_po[~datos_po.index.isin(indices_agregados)]
-                if not datos_po.empty:
-                    # Estandarizamos para que el PDF y el CSV se llamen igual
-                    oficial_pedido = datos_po.iloc[0]['PEDIDO']
-                    datos_po['PEDIDO'] = oficial_pedido
-                    datos_po['PEDIDO_DISPLAY'] = oficial_pedido
-                    
-                    filas_ordenadas.append(datos_po)
-                    indices_agregados.update(datos_po.index)
+                filas_ordenadas.append(datos_po)
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
