@@ -79,7 +79,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
             except Exception as e:
                 st.warning(f"⚠️ Hubo un detalle al leer tu hoja BASE: {e}")
 
-        # --- 1. LEYENDO CSV PRIMERO ---
+        # --- 1. LEYENDO CSV PRIMERO PARA CREAR EL MAPA MAESTRO ---
         texto_csv = archivo_csv.getvalue().decode(codificacion)
         lineas = texto_csv.splitlines()
         skip_lineas = 0
@@ -249,8 +249,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     paginas_por_po[official_gsh].extend(bloque)
                     
         else:
-            # LÓGICA MEJORADA PARA TEMU Y TIKTOK 
-            patron_pdf = r'(PO-[\w\-]+)' if plataforma == 'TEMU' else r'(JMX\d+)'
+            # LÓGICA RESTAURADA Y ESTRICTA PARA TEMU Y TIKTOK
+            # AQUÍ ESTÁ LA CORRECCIÓN: Volvemos al patrón estricto de Temu
+            patron_pdf = r'(PO-\d{3}-\d+)' if plataforma == 'TEMU' else r'(JMX\d+)'
             po_actual = None 
             
             for num_pagina, pagina in enumerate(reader.pages):
