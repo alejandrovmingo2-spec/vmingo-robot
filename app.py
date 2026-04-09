@@ -249,16 +249,13 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     paginas_por_po[official_gsh].extend(bloque)
                     
         else:
-            # LÓGICA RESTAURADA Y ESTRICTA PARA TEMU Y TIKTOK
+            # LÓGICA ORIGINAL RESTAURADA EXACTAMENTE PARA TEMU Y TIKTOK
             patron_pdf = r'(PO-\d{3}-\d+)' if plataforma == 'TEMU' else r'(JMX\d+)'
             po_actual = None 
             
             for num_pagina, pagina in enumerate(reader.pages):
                 texto = pagina.extract_text() or ""
                 matches = re.findall(patron_pdf, texto)
-                
-                # ESCUDO TEMU: Detectamos si la página es una etiqueta (contiene guías)
-                es_etiqueta = bool(re.search(r'(JMX\d+|J&T EXPRESS|TODOOR|D2D)', texto.upper()))
                 
                 if matches:
                     po_encontrado = matches[0].strip()
@@ -273,11 +270,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     if pagina not in paginas_por_po[po_actual]:
                         paginas_por_po[po_actual].append(pagina)
                 else:
-                    if plataforma == 'TEMU' and es_etiqueta:
-                        # CORTACORRIENTE: Es una etiqueta nueva sin PO, rompemos la cadena para que no se pegue al cliente anterior
-                        po_actual = None
-                    elif po_actual:
-                        # Continuación de un ticket muy largo
+                    if plataforma == 'TIKTOK' and po_actual:
                         if pagina not in paginas_por_po[po_actual]:
                             paginas_por_po[po_actual].append(pagina)
 
