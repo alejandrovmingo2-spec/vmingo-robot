@@ -6,12 +6,14 @@ import io
 import zipfile
 from datetime import datetime
 
-st.set_page_config(page_title="Robot Multiplataforma Vmingo", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Vmingo ERP - Robot Almacén", page_icon="🤖", layout="wide")
 
+# =====================================================================
+# FUNCIONES DE AYUDA
+# =====================================================================
 def limpiar_nombre(texto):
     idx = texto.lower().find('detalle')
-    if idx != -1:
-        return texto[:idx].strip()
+    if idx != -1: return texto[:idx].strip()
     return texto.strip()
 
 def detectar_plataforma_web(archivo_buffer):
@@ -44,30 +46,38 @@ def detectar_plataforma_web(archivo_buffer):
             except: pass
     return 'DESCONOCIDA', None
 
-st.title("🤖 Robot Multiplataforma Vmingo")
+st.title("🤖 Vmingo ERP: Centro de Surtido y Empaque")
 
-tab_picking, tab_robot = st.tabs(["🛒 1. Master Picking (Surtido de Almacén)", "📦 2. Robot Repartidor (PDFs y Empaque)"])
+tab_picking, tab_robot = st.tabs(["🛒 FASE 1: Master Picking (Mega-Carritos)", "📦 FASE 2: Emparejador de Guías (PDFs)"])
 
 # =====================================================================
-# PESTAÑA 1: EL GENERADOR DE MASTER PICKING
+# PESTAÑA 1: FASE DE ALMACÉN (DATOS PUROS)
 # =====================================================================
 with tab_picking:
-    st.markdown("### Generador de Picking: Avalancha y Carritos")
-    st.info("Sube tus documentos exportados (Excel o CSV). El sistema juntará todo y separará lo masivo de lo que requiere carrito.")
+    st.markdown("### 1. Asignación Matutina (Sin Guías)")
+    st.info("Sube los documentos crudos. El robot guardará los pedidos en memoria y te dará las listas de recolección para el almacén.")
     
     col_t, col_s, col_k = st.columns(3)
     with col_t: file_temu = st.file_uploader("A. Sube TEMU", type=["csv", "xlsx"], key="t_temu")
     with col_s: file_shein = st.file_uploader("B. Sube SHEIN", type=["csv", "xlsx"], key="t_shein")
-    with col_k: file_tiktok = st.file_uploader("C. Sube TIKTOK", type=["csv", "xlsx"], key="t_tiktok")
+    with col_k: file_tiktok = st.file_uploader("C. Sube TIKTOK (Archivo 1)", type=["csv", "xlsx"], key="t_tiktok")
         
-    base_picking = st.file_uploader("D. Sube tu BASE de datos (Opcional)", type=["xlsx", "xlsm"], key="base_pick")
+    col_base, col_emp = st.columns([1, 2])
+    with col_base:
+        base_picking = st.file_uploader("D. BASE (Opcional)", type=["xlsx", "xlsm"], key="base_pick")
+    with col_emp:
+        empleados_input = st.text_input("Nombres del equipo de almacén (separados por coma):", "ALDO, BELEN, ALDRICH")
 
-    if st.button("📊 Generar Master Picking", type="primary"):
+    if st.button("📊 Generar Mega-Carritos y Memorizar", type="primary"):
         archivos_subidos = [f for f in [file_temu, file_shein, file_tiktok] if f is not None]
+        empleados = [e.strip().upper() for e in empleados_input.split(',') if e.strip()]
+        
         if not archivos_subidos:
-            st.error("Sube al menos un archivo para generar el picking.")
+            st.error("❌ Sube al menos un archivo para generar el picking.")
+        elif not empleados:
+            st.error("❌ Necesitas ingresar al menos un nombre de empleado.")
         else:
-            with st.spinner("Consolidando plataformas..."):
+            with st.spinner("Procesando y memorizando pedidos..."):
                 diccionario_nombres_mp = {}
                 if base_picking:
                     try:
@@ -108,11 +118,11 @@ with tab_picking:
                             df_limpio.columns = ['PEDIDO', 'SKU', 'CANTIDAD']
                         elif plat == 'TIKTOK':
                             col_order = cols_map.get('order id')
-                            col_sku = cols_map.get('seller sku')
                             col_var = cols_map.get('variation')
-                            df_limpio = df_temp[[col_order, col_sku, cols_map.get('quantity'), col_var]].copy()
+                            columnas_utiles = [c for c in [col_order, cols_map.get('seller sku'), cols_map.get('quantity'), col_var] if c]
+                            df_limpio = df_temp[columnas_utiles].copy()
                             if col_order and col_var: df_limpio = df_limpio.drop_duplicates(subset=[col_order, col_var])
-                            df_limpio = df_limpio[['Order ID' if not col_order else col_order, 'Seller SKU' if not col_sku else col_sku, 'Quantity' if not cols_map.get('quantity') else cols_map.get('quantity')]].copy()
+                            df_limpio = df_limpio[[col_order, cols_map.get('seller sku'), cols_map.get('quantity')]].copy()
                             df_limpio.columns = ['PEDIDO', 'SKU', 'CANTIDAD']
                         elif plat == 'SHEIN':
                             df_limpio = df_temp[[cols_map.get('numero de pedido'), cols_map.get('sku del vendedor')]].copy()
@@ -120,342 +130,252 @@ with tab_picking:
                             df_limpio['CANTIDAD'] = 1
                             
                         df_limpio['PLATAFORMA'] = plat
+                        df_limpio['ORDEN_ORIGINAL'] = range(len(df_limpio)) # Crucial para Shein
                         dataframes_limpios.append(df_limpio)
 
+                # UNIFICACIÓN
                 df_total = pd.concat(dataframes_limpios, ignore_index=True)
                 df_total = df_total.dropna(subset=['PEDIDO'])
+                df_total['PEDIDO'] = df_total['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '')).str.strip()
                 df_total['SKU'] = df_total['SKU'].astype(str).str.strip()
                 df_total['CANTIDAD'] = pd.to_numeric(df_total['CANTIDAD'], errors='coerce').fillna(1)
                 df_total['NOMBRE_PRODUCTO'] = df_total['SKU'].apply(lambda x: limpiar_nombre(diccionario_nombres_mp.get(x, "Sin registro en BASE")))
                 
+                # SEPARACIÓN AVALANCHA VS CARRITO
                 conteo_por_pedido = df_total.groupby('PEDIDO')['SKU'].nunique().reset_index()
                 conteo_por_pedido.columns = ['PEDIDO', 'TIPOS_PRODUCTO']
                 df_total = df_total.merge(conteo_por_pedido, on='PEDIDO')
                 
-                df_avalancha = df_total[df_total['TIPOS_PRODUCTO'] == 1].groupby(['PLATAFORMA', 'SKU', 'NOMBRE_PRODUCTO'])['CANTIDAD'].sum().reset_index()
-                df_avalancha = df_avalancha.sort_values(by='CANTIDAD', ascending=False)
+                df_total['TIPO_SURTIDO'] = df_total['TIPOS_PRODUCTO'].apply(lambda x: 'AVALANCHA' if x == 1 else 'CARRITO')
                 
-                df_carrito = df_total[df_total['TIPOS_PRODUCTO'] > 1].groupby(['PLATAFORMA', 'SKU', 'NOMBRE_PRODUCTO'])['CANTIDAD'].sum().reset_index()
-                df_carrito = df_carrito.sort_values(by='CANTIDAD', ascending=False)
+                # REPARTICIÓN EMPLEADOS (Solo a los Carritos)
+                pedidos_carrito = df_total[df_total['TIPO_SURTIDO'] == 'CARRITO']['PEDIDO'].unique()
+                pedidos_avalancha = df_total[df_total['TIPO_SURTIDO'] == 'AVALANCHA']['PEDIDO'].unique()
                 
+                num_empleados = len(empleados)
+                base_car = len(pedidos_carrito) // num_empleados
+                sob_car = len(pedidos_carrito) % num_empleados
+                cantidades_car = [base_car + (1 if i < sob_car else 0) for i in range(num_empleados)]
+                
+                asignaciones = {}
+                # Avalancha va a un bloque neutral
+                for po in pedidos_avalancha: asignaciones[po] = 'AVALANCHA_GENERAL'
+                
+                # Carritos van a empleados
+                idx_inicio = 0
+                for i, emp in enumerate(empleados):
+                    idx_fin = idx_inicio + cantidades_car[i]
+                    for po in pedidos_carrito[idx_inicio:idx_fin]:
+                        asignaciones[po] = emp
+                    idx_inicio = idx_fin
+                    
+                df_total['ASIGNADO_A'] = df_total['PEDIDO'].map(asignaciones)
+                df_total['TRACKING_ID'] = "" # Campo vacío preparándose para TikTok en Fase 2
+                
+                # GUARDAR EN MEMORIA
+                st.session_state['master_df'] = df_total
+                st.session_state['empleados_activos'] = empleados
+
+                # CREAR EXCEL DE PICKING (Fase 1)
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_avalancha.to_excel(writer, sheet_name='Masivo (Avalancha)', index=False)
-                    df_carrito.to_excel(writer, sheet_name='Carritos (Múltiples)', index=False)
-                    for sheet in ['Masivo (Avalancha)', 'Carritos (Múltiples)']:
-                        ws = writer.sheets[sheet]
-                        ws.set_column('A:A', 15)
-                        ws.set_column('B:B', 20)
-                        ws.set_column('C:C', 50)
-                        ws.set_column('D:D', 12)
-                        formato_temu = writer.book.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006'})
-                        ws.conditional_format('A2:A1000', {'type': 'text', 'criteria': 'containing', 'value': 'TEMU', 'format': formato_temu})
+                    formato_temu = writer.book.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006'})
+                    formato_titulo = writer.book.add_format({'bold': True, 'font_size': 14, 'bg_color': '#D9E1F2', 'border': 1})
+                    
+                    # Hoja Avalancha
+                    df_ava = df_total[df_total['TIPO_SURTIDO'] == 'AVALANCHA'].groupby(['PLATAFORMA', 'SKU', 'NOMBRE_PRODUCTO'])['CANTIDAD'].sum().reset_index()
+                    df_ava = df_ava.sort_values(by='CANTIDAD', ascending=False)
+                    df_ava.to_excel(writer, sheet_name='⚡ MASIVOS (Avalancha)', index=False)
+                    ws_ava = writer.sheets['⚡ MASIVOS (Avalancha)']
+                    ws_ava.set_column('A:A', 15); ws_ava.set_column('B:B', 20); ws_ava.set_column('C:C', 50); ws_ava.set_column('D:D', 12)
+                    ws_ava.conditional_format('A2:A1000', {'type': 'text', 'criteria': 'containing', 'value': 'TEMU', 'format': formato_temu})
+                    
+                    # Hojas por Empleado (Mega-Carritos)
+                    for emp in empleados:
+                        df_emp = df_total[df_total['ASIGNADO_A'] == emp].groupby(['PLATAFORMA', 'SKU', 'NOMBRE_PRODUCTO'])['CANTIDAD'].sum().reset_index()
+                        df_emp = df_emp.sort_values(by=['PLATAFORMA', 'NOMBRE_PRODUCTO'])
+                        df_emp.to_excel(writer, sheet_name=f"🛒 {emp}", index=False)
+                        ws_emp = writer.sheets[f"🛒 {emp}"]
+                        ws_emp.set_column('A:A', 15); ws_emp.set_column('B:B', 20); ws_emp.set_column('C:C', 50); ws_emp.set_column('D:D', 12)
+                        ws_emp.conditional_format('A2:A1000', {'type': 'text', 'criteria': 'containing', 'value': 'TEMU', 'format': formato_temu})
 
-                st.success("✅ ¡Master Picking Listo!")
-                st.write("🔥 **Top 3 Productos para Surtido Masivo (Avalancha):**")
-                st.dataframe(df_avalancha.head(3), use_container_width=True)
-                st.download_button("📥 Descargar Master Picking (Excel)", data=output.getvalue(), file_name=f"Master_Picking_{datetime.now().strftime('%d-%m-%Y')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-
+                st.success("✅ ¡Robot ha memorizado la repartición! Listas de recolección listas.")
+                st.write("🔥 **Top 5 Productos Avalancha (Ir por cajas completas):**")
+                st.dataframe(df_ava.head(5), use_container_width=True)
+                
+                st.download_button("📥 Descargar Listas de Almacén (Excel)", data=output.getvalue(), file_name=f"Master_Picking_{datetime.now().strftime('%d-%m-%Y')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
 
 # =====================================================================
-# PESTAÑA 2: EL ROBOT REPARTIDOR DE PDFs (CON DOBLE REPARTICIÓN)
+# PESTAÑA 2: FASE DE PAQUETERÍA (CORTAR PDFs)
 # =====================================================================
 with tab_robot:
-    st.markdown("Sube tus documentos para repartir las guías y dividirlas en **Avalancha** y **Carrito** por empleado.")
+    st.markdown("### 2. Emparejador de Guías")
+    
+    if 'master_df' not in st.session_state:
+        st.warning("⚠️ El robot no tiene pedidos en memoria. Primero realiza la Fase 1 (Master Picking).")
+    else:
+        df_memoria = st.session_state['master_df']
+        st.success(f"🧠 Memoria Activa: El robot recuerda {df_memoria['PEDIDO'].nunique()} pedidos únicos listos para empatar con sus guías.")
+        
+        st.markdown("Sube únicamente los PDFs gigantes de tus guías y el **Archivo 2 de TikTok** (el que trae los JMX). El robot ignorará la basura y cortará lo que toca.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        archivo_csv = st.file_uploader("1. Sube el Documento Exportado (CSV / Excel)", type=["csv", "xlsx"], key="rob_doc")
-        archivo_pdf = st.file_uploader("2. Sube el PDF gigante", type=["pdf"], key="rob_pdf")
-    with col2:
-        archivo_base = st.file_uploader("3. Sube tu BASE (Opcional)", type=["xlsx", "xlsm"], key="rob_base")
+        col1, col2 = st.columns(2)
+        with col1:
+            pdf_temu = st.file_uploader("📦 PDF Guías TEMU", type=["pdf"])
+            pdf_shein = st.file_uploader("📦 PDF Guías SHEIN", type=["pdf"])
+        with col2:
+            pdf_tiktok = st.file_uploader("📦 PDF Guías TIKTOK", type=["pdf"])
+            tiktok_csv_2 = st.file_uploader("📝 Archivo 2 TIKTOK (Con JMX mezclados)", type=["csv", "xlsx"])
 
-    empleados_input = st.text_input("Nombres del equipo en turno (separados por coma):", "ALDO, BELEN, ALDRICH")
-
-    if st.button("🚀 Procesar Guías y Empaque", type="primary"):
-        if not archivo_csv or not archivo_pdf:
-            st.error("❌ Error: Faltan archivos.")
-            st.stop()
-
-        empleados = [e.strip() for e in empleados_input.split(',') if e.strip()]
-        if not empleados:
-            st.error("❌ Error: Necesitas ingresar al menos un nombre.")
-            st.stop()
-
-        with st.spinner("Analizando documentos y dividiendo cargas..."):
-            plataforma, codificacion = detectar_plataforma_web(archivo_csv)
-            if plataforma == 'DESCONOCIDA':
-                st.error("❌ ERROR: No pude identificar la plataforma.")
+        if st.button("✂️ Cortar y Generar PDFs Finales", type="primary"):
+            if not (pdf_temu or pdf_shein or pdf_tiktok):
+                st.error("❌ Sube al menos un archivo PDF de guías para cortar.")
                 st.stop()
                 
-            st.success(f"¡Plataforma detectada!: **{plataforma}**")
-
-            # --- LEYENDO BASE ---
-            diccionario_nombres = {}
-            if archivo_base:
-                try:
-                    df_base = pd.read_excel(archivo_base, sheet_name='BASE')
-                    df_base.columns = df_base.columns.str.strip().str.upper() 
-                    if 'SKU' in df_base.columns and 'NOMBRE PLATAFORMA' in df_base.columns:
-                        for idx, fila in df_base.iterrows():
-                            sku = str(fila['SKU']).strip()
-                            nombre = str(fila['NOMBRE PLATAFORMA']).strip()
-                            if pd.notna(sku) and sku != 'nan':
-                                diccionario_nombres[sku] = nombre
-                except: pass
-
-            # --- 1. LEYENDO CSV/EXCEL ---
-            archivo_csv.seek(0)
-            if archivo_csv.name.endswith('.xlsx'):
-                skip = codificacion if isinstance(codificacion, int) else 0
-                df = pd.read_excel(archivo_csv, skiprows=skip)
-            else:
-                texto_csv = archivo_csv.getvalue().decode(codificacion)
-                lineas = texto_csv.splitlines()
-                skip_lineas = 0
-                for i, linea in enumerate(lineas[:15]):
-                    lin_low = linea.lower().replace('ú', 'u').replace('ó', 'o').replace('í', 'i')
-                    if (plataforma == 'TEMU' and 'id del pedido' in lin_low) or (plataforma == 'TIKTOK' and 'order id' in lin_low) or (plataforma == 'SHEIN' and 'numero de pedido' in lin_low):
-                        skip_lineas = i
-                        break
-                archivo_csv.seek(0) 
-                df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion)
-            
-            cols_map = {c.lower().replace('ú', 'u').replace('ó', 'o').strip(): c for c in df.columns}
-
-            mapa_pedidos_tiktok = {}
-            if plataforma == 'TIKTOK':
-                col_order = cols_map.get('order id')
-                col_track = cols_map.get('tracking id')
-                for idx, row in df.iterrows():
-                    order_id = str(row.get(col_order, '')).replace('.0', '').strip() if col_order else ''
-                    tracking_id = str(row.get(col_track, '')).replace('.0', '').strip() if col_track else ''
-                    if order_id and order_id != 'nan': mapa_pedidos_tiktok[order_id] = order_id
-                    if tracking_id and tracking_id != 'nan': mapa_pedidos_tiktok[tracking_id] = order_id
-
-            if plataforma == 'TEMU':
-                df_filtrado = df[[cols_map.get('id del pedido'), cols_map.get('sku de contribucion'), cols_map.get('nombre del producto'), cols_map.get('variacion'), cols_map.get('cantidad a enviar')]].copy()
-                df_filtrado.columns = ['PEDIDO', 'SKU', 'NOMBRE_ORIGINAL', 'VARIACION', 'CANTIDAD']
-            elif plataforma == 'TIKTOK':
-                col_order = cols_map.get('order id')
-                col_var = cols_map.get('variation')
-                columnas_utiles = [c for c in [col_order, cols_map.get('seller sku'), cols_map.get('product name'), col_var, cols_map.get('quantity')] if c]
-                df_filtrado = df[columnas_utiles].copy()
-                if col_order and col_var: df_filtrado = df_filtrado.drop_duplicates(subset=[col_order, col_var])
-                if col_order: df_filtrado['PEDIDO'] = df_filtrado[col_order].astype(str).str.strip()
-                df_filtrado.rename(columns={cols_map.get('seller sku'): 'SKU', cols_map.get('product name'): 'NOMBRE_ORIGINAL', col_var: 'VARIACION', cols_map.get('quantity'): 'CANTIDAD'}, inplace=True)
-            elif plataforma == 'SHEIN':
-                col_pedido = cols_map.get('numero de pedido')
-                columnas_utiles = [c for c in [col_pedido, cols_map.get('sku del vendedor'), cols_map.get('nombre del producto'), cols_map.get('especificacion')] if c]
-                df_filtrado = df[columnas_utiles].copy()
-                df_filtrado['CANTIDAD'] = 1
-                if col_pedido: df_filtrado['PEDIDO'] = df_filtrado[col_pedido].astype(str).str.strip()
-                df_filtrado.rename(columns={cols_map.get('sku del vendedor'): 'SKU', cols_map.get('nombre del producto'): 'NOMBRE_ORIGINAL', cols_map.get('especificacion'): 'VARIACION'}, inplace=True)
-
-            df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
-            df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
-            df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
-            df_filtrado['SKU'] = df_filtrado.get('SKU', pd.Series(dtype=str)).fillna('SIN SKU').astype(str)
-            df_filtrado['CANTIDAD'] = pd.to_numeric(df_filtrado.get('CANTIDAD', pd.Series(dtype=int)), errors='coerce').fillna(0)
-            df_filtrado = df_filtrado[df_filtrado['CANTIDAD'] > 0]
-
-            df_filtrado['Nombre Correcto'] = df_filtrado.apply(lambda fila: limpiar_nombre(diccionario_nombres.get(str(fila.get('SKU', '')).strip(), f"{fila.get('NOMBRE_ORIGINAL', '')} - Var: {fila.get('VARIACION', 'N/A')}")), axis=1)
-            df_filtrado['Nombre Correcto'] = df_filtrado['Nombre Correcto'].fillna('SIN NOMBRE').astype(str)
-
-            pos_finales_reales = list(dict.fromkeys(df_filtrado['PEDIDO'].tolist()))
-
-            # --- 2. LEYENDO PDF (3 CEREBROS INDEPENDIENTES) ---
-            paginas_por_po = {}
-            reader = PyPDF2.PdfReader(archivo_pdf)
-            
-            if plataforma == 'SHEIN':
-                chunks_pdf = []
-                chunk_actual = []
-                for num_pagina, pagina in enumerate(reader.pages):
-                    texto = pagina.extract_text() or ""
-                    if re.search(r'(JMX|GSH|J&T|TODOOR|D2D)', texto.upper()) and 'DECLARACIÓN DE CONTENIDO' not in texto.upper():
-                        if chunk_actual: chunks_pdf.append(chunk_actual)
-                        chunk_actual = [pagina]
-                    else:
-                        if chunk_actual: chunk_actual.append(pagina)
-                        else: chunk_actual = [pagina]
-                if chunk_actual: chunks_pdf.append(chunk_actual)
-
-                for i, pedido_gsh in enumerate(pos_finales_reales):
-                    if i < len(chunks_pdf): paginas_por_po[pedido_gsh] = chunks_pdf[i]
-                    else: paginas_por_po[pedido_gsh] = []
-
-            elif plataforma == 'TEMU':
-                po_actual = None 
-                for num_pagina, pagina in enumerate(reader.pages):
-                    matches = re.findall(r'(PO-\d{3}-\d+)', pagina.extract_text() or "")
-                    if matches:
-                        po_actual = str(matches[0]).strip()
-                        if po_actual not in paginas_por_po:
-                            paginas_por_po[po_actual] = []
-                            if num_pagina > 0 and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
-                                paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
-                        if pagina not in paginas_por_po[po_actual]: paginas_por_po[po_actual].append(pagina)
-
-            elif plataforma == 'TIKTOK':
-                po_actual = None 
-                for num_pagina, pagina in enumerate(reader.pages):
-                    matches = re.findall(r'(JMX\d+)', pagina.extract_text() or "")
-                    if matches:
-                        po_actual = str(matches[0]).strip()
-                        if po_actual not in paginas_por_po: paginas_por_po[po_actual] = []
-                        if pagina not in paginas_por_po[po_actual]: paginas_por_po[po_actual].append(pagina)
-                    else:
-                        if po_actual and pagina not in paginas_por_po[po_actual]: paginas_por_po[po_actual].append(pagina)
-
-                paginas_corregidas = {}
-                for jmx_key, paginas in paginas_por_po.items():
-                    order_id = mapa_pedidos_tiktok.get(jmx_key, jmx_key)
-                    if order_id not in paginas_corregidas: paginas_corregidas[order_id] = []
-                    for pag in paginas:
-                        if pag not in paginas_corregidas[order_id]: paginas_corregidas[order_id].append(pag)
-                paginas_por_po = paginas_corregidas
+            with st.spinner("Leyendo PDFs y cruzando con la memoria..."):
+                paginas_por_pedido = {} # Diccionario maestro: {Pedido: [Paginas PDF]}
                 
-            lista_pos_pdf = list(paginas_por_po.keys())
-            pos_finales_reales = [po for po in pos_finales_reales if po in lista_pos_pdf]
+                # --- PROCESAR TIKTOK FASE 2 ---
+                if pdf_tiktok and tiktok_csv_2:
+                    st.info("Rescatando JMX correctos de TikTok...")
+                    plat, conf = detectar_plataforma_web(tiktok_csv_2)
+                    tiktok_csv_2.seek(0)
+                    if tiktok_csv_2.name.endswith('.xlsx'):
+                        df_tk2 = pd.read_excel(tiktok_csv_2, skiprows=conf if isinstance(conf, int) else 0)
+                    else:
+                        texto_csv = tiktok_csv_2.getvalue().decode(conf)
+                        skip = 0
+                        for i, l in enumerate(texto_csv.splitlines()[:10]):
+                            if 'order id' in l.lower(): skip = i; break
+                        tiktok_csv_2.seek(0)
+                        df_tk2 = pd.read_csv(tiktok_csv_2, skiprows=skip, encoding=conf)
+                    
+                    cols_tk = {c.lower().strip(): c for c in df_tk2.columns}
+                    col_order = cols_tk.get('order id')
+                    col_track = cols_tk.get('tracking id')
+                    
+                    if col_order and col_track:
+                        # Limpiamos ceros y espacios
+                        df_tk2[col_order] = df_tk2[col_order].astype(str).apply(lambda x: x.replace('.0', '')).str.strip()
+                        df_tk2[col_track] = df_tk2[col_track].astype(str).apply(lambda x: x.replace('.0', '')).str.strip()
+                        
+                        # Mapeamos en memoria
+                        mapeo_jmx = dict(zip(df_tk2[col_order], df_tk2[col_track]))
+                        df_memoria['TRACKING_ID'] = df_memoria.apply(
+                            lambda row: mapeo_jmx.get(row['PEDIDO'], "") if row['PLATAFORMA'] == 'TIKTOK' else row['TRACKING_ID'], axis=1
+                        )
+                        
+                    # Cortar PDF TikTok usando JMX
+                    reader_tk = PyPDF2.PdfReader(pdf_tiktok)
+                    jmx_actual = None
+                    temp_jmx_pages = {}
+                    for num, pag in enumerate(reader_tk.pages):
+                        matches = re.findall(r'(JMX\d+)', pag.extract_text() or "")
+                        if matches:
+                            jmx_actual = str(matches[0]).strip()
+                            if jmx_actual not in temp_jmx_pages: temp_jmx_pages[jmx_actual] = []
+                            temp_jmx_pages[jmx_actual].append(pag)
+                        else:
+                            if jmx_actual: temp_jmx_pages[jmx_actual].append(pag)
+                    
+                    # Conectar JMX con el PEDIDO de la memoria
+                    df_tk_memoria = df_memoria[df_memoria['PLATAFORMA'] == 'TIKTOK']
+                    for idx, row in df_tk_memoria.iterrows():
+                        jmx = row['TRACKING_ID']
+                        pedido = row['PEDIDO']
+                        if jmx in temp_jmx_pages:
+                            paginas_por_pedido[pedido] = temp_jmx_pages[jmx]
+                            
+                elif pdf_tiktok and not tiktok_csv_2:
+                    st.warning("⚠️ Subiste PDF de TikTok pero faltó el Archivo 2 con los JMX. No podré emparejar TikTok.")
 
-            df_ordenado = pd.concat([df_filtrado[df_filtrado['PEDIDO'] == po].copy() for po in pos_finales_reales if not df_filtrado[df_filtrado['PEDIDO'] == po].empty])
+                # --- PROCESAR TEMU ---
+                if pdf_temu:
+                    st.info("Extrayendo guías de TEMU...")
+                    reader_temu = PyPDF2.PdfReader(pdf_temu)
+                    po_actual = None 
+                    for num, pag in enumerate(reader_temu.pages):
+                        matches = re.findall(r'(PO-\d{3}-\d+)', pag.extract_text() or "")
+                        if matches:
+                            po_actual = str(matches[0]).strip()
+                            if po_actual not in paginas_por_pedido:
+                                paginas_por_pedido[po_actual] = []
+                                # Rescatar página anterior si es de Temu
+                                if num > 0 and reader_temu.pages[num - 1] not in paginas_por_pedido[po_actual]:
+                                    paginas_por_pedido[po_actual].append(reader_temu.pages[num - 1])
+                            if pag not in paginas_por_pedido[po_actual]: paginas_por_pedido[po_actual].append(pag)
 
-            if df_ordenado.empty:
-                st.error("❌ ERROR: Ningún pedido físico en el PDF coincidió con tu Excel.")
-                st.stop()
+                # --- PROCESAR SHEIN (Orden Estricto) ---
+                if pdf_shein:
+                    st.info("Emparejando SHEIN respetando el orden sagrado...")
+                    reader_shein = PyPDF2.PdfReader(pdf_shein)
+                    chunks_shein = []
+                    chunk_actual = []
+                    for pag in reader_shein.pages:
+                        texto = pag.extract_text() or ""
+                        if re.search(r'(JMX|GSH|J&T|TODOOR|D2D)', texto.upper()) and 'DECLARACIÓN DE CONTENIDO' not in texto.upper():
+                            if chunk_actual: chunks_shein.append(chunk_actual)
+                            chunk_actual = [pag]
+                        else:
+                            if chunk_actual: chunk_actual.append(pag)
+                            else: chunk_actual = [pag]
+                    if chunk_actual: chunks_shein.append(chunk_actual)
+                    
+                    # Obtener los pedidos de Shein en el ORDEN EXACTO en que entraron en la mañana
+                    pedidos_shein_ordenados = df_memoria[df_memoria['PLATAFORMA'] == 'SHEIN'].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique()
+                    
+                    for i, ped_shein in enumerate(pedidos_shein_ordenados):
+                        if i < len(chunks_shein):
+                            paginas_por_pedido[ped_shein] = chunks_shein[i]
 
-            # =================================================================
-            # DIVISIÓN INTELIGENTE: AVALANCHA Y CARRITO
-            # =================================================================
-            st.success(f"📄 ÉXITO: {len(pos_finales_reales)} pedidos físicos encontrados. Dividiendo en Avalancha y Carrito...")
-
-            conteo_skus = df_ordenado.groupby('PEDIDO')['SKU'].nunique()
-            lista_po_avalancha = conteo_skus[conteo_skus == 1].index.tolist()
-            lista_po_carrito = conteo_skus[conteo_skus > 1].index.tolist()
-
-            # Respetamos el orden físico del PDF para no cruzar guías
-            lista_po_avalancha = [po for po in pos_finales_reales if po in lista_po_avalancha]
-            lista_po_carrito = [po for po in pos_finales_reales if po in lista_po_carrito]
-
-            num_empleados = len(empleados)
-
-            # Division Avalancha
-            base_ava = len(lista_po_avalancha) // num_empleados
-            sob_ava = len(lista_po_avalancha) % num_empleados
-            cant_emp_ava = [base_ava + (1 if i < sob_ava else 0) for i in range(num_empleados)]
-
-            # Division Carrito
-            base_car = len(lista_po_carrito) // num_empleados
-            sob_car = len(lista_po_carrito) % num_empleados
-            cant_emp_car = [base_car + (1 if i < sob_car else 0) for i in range(num_empleados)]
-
-            colores_division = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD']
-
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                # =================================================================
+                # ENSAMBLAJE DE PDFs FINALES
+                # =================================================================
+                zip_buffer = io.BytesIO()
+                empleados_activos = st.session_state['empleados_activos']
                 
-                excel_buffer = io.BytesIO()
-                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
                     
-                    idx_inicio_ava = 0
-                    idx_inicio_car = 0
+                    # 1. El bloque masivo (AVALANCHA)
+                    pdf_avalancha_writer = PyPDF2.PdfWriter()
+                    pedidos_ava = df_memoria[df_memoria['ASIGNADO_A'] == 'AVALANCHA_GENERAL']['PEDIDO'].unique()
+                    hubo_avalancha = False
                     
-                    for i, emp in enumerate(empleados):
-                        color_actual = colores_division[i % len(colores_division)]
-                        
-                        # Obtener rebanadas de POs
-                        idx_fin_ava = idx_inicio_ava + cant_emp_ava[i]
-                        pos_emp_ava = lista_po_avalancha[idx_inicio_ava:idx_fin_ava]
-                        idx_inicio_ava = idx_fin_ava
-                        
-                        idx_fin_car = idx_inicio_car + cant_emp_car[i]
-                        pos_emp_car = lista_po_carrito[idx_inicio_car:idx_fin_car]
-                        idx_inicio_car = idx_fin_car
-                        
-                        df_emp_ava = df_ordenado[df_ordenado['PEDIDO'].isin(pos_emp_ava)].copy()
-                        df_emp_car = df_ordenado[df_ordenado['PEDIDO'].isin(pos_emp_car)].copy()
-                        
-                        worksheet = writer.book.add_worksheet(emp)
-                        formato_titulo_ava = writer.book.add_format({'bold': True, 'font_size': 14, 'bg_color': '#FFE699', 'border': 1})
-                        formato_titulo_car = writer.book.add_format({'bold': True, 'font_size': 14, 'bg_color': '#9BC2E6', 'border': 1})
-                        
-                        worksheet.write(0, 0, f"HOJA DE TRABAJO: {emp.upper()}", writer.book.add_format({'bold': True, 'font_size': 16}))
-                        
-                        fila_actual = 2
-                        
-                        # --- SECCIÓN AVALANCHA EN EXCEL ---
-                        if not df_emp_ava.empty:
-                            worksheet.write(fila_actual, 0, f"⚡ TU AVALANCHA ({len(pos_emp_ava)} Guías)", formato_titulo_ava)
-                            fila_actual += 2
+                    for po in pedidos_ava:
+                        if po in paginas_por_pedido:
+                            hubo_avalancha = True
+                            for p in paginas_por_pedido[po]: pdf_avalancha_writer.add_page(p)
                             
-                            pick_ava = df_emp_ava.groupby(['SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
-                            pick_ava.rename(columns={'Nombre Correcto': 'Descripción', 'CANTIDAD': 'Total'}, inplace=True)
-                            pick_ava = pick_ava.sort_values(by='Descripción').reset_index(drop=True)
-                            
-                            inicio_ava = fila_actual
-                            fin_ava = inicio_ava + len(pick_ava)
-                            pick_ava.to_excel(writer, sheet_name=emp, index=False, header=False, startrow=inicio_ava + 1, startcol=0)
-                            worksheet.add_table(inicio_ava, 0, fin_ava, len(pick_ava.columns) - 1, {'columns': [{'header': c} for c in pick_ava.columns], 'style': 'Table Style Light 19'})
-                            fila_actual = fin_ava + 3
+                    if hubo_avalancha:
+                        pdf_ava_buf = io.BytesIO()
+                        pdf_avalancha_writer.write(pdf_ava_buf)
+                        zip_file.writestr("1_GUIAS_MASIVAS_AVALANCHA.pdf", pdf_ava_buf.getvalue())
+                    
+                    # 2. Los archivos de los empleados (CARRITOS)
+                    for emp in empleados_activos:
+                        pdf_emp_writer = PyPDF2.PdfWriter()
+                        pedidos_emp = df_memoria[df_memoria['ASIGNADO_A'] == emp]['PEDIDO'].unique()
+                        hubo_emp = False
                         
-                        # --- SECCIÓN CARRITO EN EXCEL ---
-                        if not df_emp_car.empty:
-                            worksheet.write(fila_actual, 0, f"🛒 TU CARRITO ({len(pos_emp_car)} Guías)", formato_titulo_car)
-                            fila_actual += 2
-                            
-                            pick_car = df_emp_car.groupby(['SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
-                            pick_car.rename(columns={'Nombre Correcto': 'Descripción', 'CANTIDAD': 'Total'}, inplace=True)
-                            pick_car = pick_car.sort_values(by='Descripción').reset_index(drop=True)
-                            
-                            inicio_car = fila_actual
-                            fin_car = inicio_car + len(pick_car)
-                            pick_car.to_excel(writer, sheet_name=emp, index=False, header=False, startrow=inicio_car + 1, startcol=0)
-                            worksheet.add_table(inicio_car, 0, fin_car, len(pick_car.columns) - 1, {'columns': [{'header': c} for c in pick_car.columns], 'style': 'Table Style Light 9'})
-                        
-                        worksheet.set_column('A:A', 20)
-                        worksheet.set_column('B:B', 65)
+                        for po in pedidos_emp:
+                            if po in paginas_por_pedido:
+                                hubo_emp = True
+                                for p in paginas_por_pedido[po]: pdf_emp_writer.add_page(p)
+                                
+                        if hubo_emp:
+                            pdf_emp_buf = io.BytesIO()
+                            pdf_emp_writer.write(pdf_emp_buf)
+                            zip_file.writestr(f"2_GUIAS_CARRITO_{emp}.pdf", pdf_emp_buf.getvalue())
 
-                        # --- CREACIÓN DE PDFs FÍSICOS SEPARADOS ---
-                        # Generamos PDF de Avalancha para este empleado
-                        if pos_emp_ava:
-                            pdf_ava_writer = PyPDF2.PdfWriter()
-                            for po in pos_emp_ava:
-                                if po in paginas_por_po:
-                                    for pagina in paginas_por_po[po]:
-                                        pdf_ava_writer.add_page(pagina)
-                            pdf_ava_buffer = io.BytesIO()
-                            pdf_ava_writer.write(pdf_ava_buffer)
-                            zip_file.writestr(f"1_Avalancha_{emp}.pdf", pdf_ava_buffer.getvalue())
+                st.session_state['descarga_pdfs'] = zip_buffer.getvalue()
 
-                        # Generamos PDF de Carrito para este empleado
-                        if pos_emp_car:
-                            pdf_car_writer = PyPDF2.PdfWriter()
-                            for po in pos_emp_car:
-                                if po in paginas_por_po:
-                                    for pagina in paginas_por_po[po]:
-                                        pdf_car_writer.add_page(pagina)
-                            pdf_car_buffer = io.BytesIO()
-                            pdf_car_writer.write(pdf_car_buffer)
-                            zip_file.writestr(f"2_Carrito_{emp}.pdf", pdf_car_buffer.getvalue())
-
-                zip_file.writestr(f"Reparticion_FINAL_{plataforma}.xlsx", excel_buffer.getvalue())
-
-            st.session_state['descarga_lista'] = zip_buffer.getvalue()
-            st.session_state['plataforma_procesada'] = plataforma
-
-if 'descarga_lista' in st.session_state:
-    st.balloons()
-    plat = st.session_state.get('plataforma_procesada', 'Vmingo')
-    fecha = datetime.now().strftime("%d-%m-%Y")
-    nombre_archivo = f"Guias_{plat}_Divididas_{fecha}.zip"
-    
-    st.success(f"✨ ¡Todo listo! Se ha generado el archivo {nombre_archivo} con el Excel de repartición exacta y los PDFs individuales separados por etapa.")
-    
-    st.download_button(
-        label=f"📦 Descargar {nombre_archivo}",
-        data=st.session_state['descarga_lista'],
-        file_name=nombre_archivo,
-        mime="application/zip",
-        type="primary"
-    )
+        if 'descarga_pdfs' in st.session_state:
+            st.balloons()
+            st.success("✂️ ¡Guías emparejadas y recortadas con éxito! Basura descartada.")
+            st.download_button(
+                label="📦 Descargar ZIP con PDFs Listos para Imprimir",
+                data=st.session_state['descarga_pdfs'],
+                file_name=f"Guias_Vmingo_Recortadas_{datetime.now().strftime('%d-%m-%Y')}.zip",
+                mime="application/zip",
+                type="primary"
+            )
