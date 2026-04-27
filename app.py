@@ -8,35 +8,41 @@ from datetime import datetime
 
 st.set_page_config(page_title="Vmingo ERP - Robot Almacén", page_icon="🤖", layout="wide")
 
+# =====================================================================
+# FUNCIONES DE AYUDA BLINDADAS (XLSX Y CSV)
+# =====================================================================
 def limpiar_nombre(texto):
     idx = texto.lower().find('detalle')
     if idx != -1: return texto[:idx].strip()
     return texto.strip()
 
 def detectar_plataforma_web(archivo_buffer):
-    if archivo_buffer.name.endswith('.xlsx'):
+    # 1. Intentar leer como Excel de forma tradicional
+    if archivo_buffer.name.endswith('.xlsx') or archivo_buffer.name.endswith('.xls'):
         for i in range(10):
             try:
                 df_temp = pd.read_excel(archivo_buffer, skiprows=i, nrows=2)
                 cols = [str(c).lower().replace('ú','u').replace('ó','o').replace('í','i').strip() for c in df_temp.columns]
                 if 'id del pedido' in cols and 'sku de contribucion' in cols: return 'TEMU', i
-                if 'order id' in cols and 'seller sku' in cols: return 'TIKTOK', i
-                if 'numero de pedido' in cols and 'sku del vendedor' in cols: return 'SHEIN', i
+                if ('order id' in cols or 'id de pedido' in cols) and ('seller sku' in cols or 'sku del vendedor' in cols): return 'TIKTOK', i
+                if ('numero de pedido' in cols or 'número de pedido' in cols) and 'sku del vendedor' in cols: return 'SHEIN', i
             except: pass
-        return 'DESCONOCIDA', None
-    else:
-        encodings_a_probar = ['utf-8-sig', 'utf-8', 'latin1', 'cp1252']
-        contenido = archivo_buffer.getvalue()
-        for cod in encodings_a_probar:
-            try:
-                texto = contenido.decode(cod)
-                lineas = texto.splitlines()
-                for i, linea in enumerate(lineas[:15]):
-                    lin_low = linea.lower().replace('ú', 'u').replace('ó', 'o').replace('í', 'i')
-                    if 'id del pedido' in lin_low and 'sku de contribu' in lin_low: return 'TEMU', cod
-                    if 'order id' in lin_low and 'seller sku' in lin_low: return 'TIKTOK', cod
-                    if 'numero de pedido' in lin_low and 'sku' in lin_low: return 'SHEIN', cod
-            except: pass
+            
+    # 2. Si falla el Excel (o es un CSV disfrazado), forzar lectura como texto plano
+    archivo_buffer.seek(0)
+    encodings_a_probar = ['utf-8-sig', 'utf-8', 'latin1', 'cp1252']
+    contenido = archivo_buffer.getvalue()
+    for cod in encodings_a_probar:
+        try:
+            texto = contenido.decode(cod)
+            lineas = texto.splitlines()
+            for i, linea in enumerate(lineas[:15]):
+                lin_low = linea.lower().replace('ú', 'u').replace('ó', 'o').replace('í', 'i')
+                if 'id del pedido' in lin_low and 'sku de contribu' in lin_low: return 'TEMU', cod
+                if ('order id' in lin_low or 'id de pedido' in lin_low) and ('seller sku' in lin_low or 'sku del vendedor' in lin_low): return 'TIKTOK', cod
+                if 'numero de pedido' in lin_low and 'sku' in lin_low: return 'SHEIN', cod
+        except: pass
+        
     return 'DESCONOCIDA', None
 
 st.title("🤖 Vmingo ERP: Centro de Surtido y Empaque")
@@ -87,33 +93,33 @@ with tab_picking:
                     archivo.seek(0)
                     
                     if plat == 'DESCONOCIDA': 
-                        st.error(f"❌ ERROR: No pude reconocer el archivo '{archivo.name}'.")
+                        st.error(f"❌ ERROR: No pude reconocer el archivo '{archivo.name}'. Asegúrate de que no tenga contraseña.")
                         continue
                         
-                    if archivo.name.endswith('.xlsx'):
-                        skip = conf if isinstance(conf, int) else 0
-                        df_temp = pd.read_excel(archivo, skiprows=skip)
+                    # Lectura a prueba de balas dependiendo de cómo se detectó
+                    if isinstance(conf, int): 
+                        df_temp = pd.read_excel(archivo, skiprows=conf)
                     else:
                         texto_csv = archivo.getvalue().decode(conf)
                         skip_lineas = 0
                         for i, linea in enumerate(texto_csv.splitlines()[:15]):
                             lin_low = linea.lower().replace('ú', 'u').replace('ó', 'o').replace('í', 'i')
-                            if (plat == 'TEMU' and 'id del pedido' in lin_low) or (plat == 'TIKTOK' and 'order id' in lin_low) or (plat == 'SHEIN' and 'numero de pedido' in lin_low):
+                            if (plat == 'TEMU' and 'id del pedido' in lin_low) or (plat == 'TIKTOK' and ('order id' in lin_low or 'id de pedido' in lin_low)) or (plat == 'SHEIN' and 'numero de pedido' in lin_low):
                                 skip_lineas = i; break
                         archivo.seek(0) 
                         df_temp = pd.read_csv(archivo, skiprows=skip_lineas, encoding=conf)
 
                     cols_map = {c.lower().replace('ú', 'u').replace('ó', 'o').strip(): c for c in df_temp.columns}
                     
-                    # --- LÓGICA DE LECTURA ORIGINAL DE ALEJANDRO ---
+                    # --- LÓGICA DE LECTURA BILINGÜE Y ORIGINAL ---
                     if plat == 'TEMU':
                         col_pedido = cols_map.get('id del pedido')
-                        col_sku = cols_map.get('sku de contribución', cols_map.get('sku de contribucion'))
+                        col_sku = cols_map.get('sku de contribucion', cols_map.get('sku'))
                         col_nombre = cols_map.get('nombre del producto')
-                        col_var = cols_map.get('variación', cols_map.get('variacion'))
+                        col_var = cols_map.get('variacion')
                         col_cant = cols_map.get('cantidad a enviar')
-                        columnas_utiles = [c for c in [col_pedido, col_sku, col_nombre, col_var, col_cant] if c]
-                        df_limpio = df_temp[columnas_utiles].copy()
+                        
+                        df_limpio = df_temp[[c for c in [col_pedido, col_sku, col_nombre, col_var, col_cant] if c]].copy()
                         rename_dict = {}
                         if col_pedido: rename_dict[col_pedido] = 'PEDIDO'
                         if col_sku: rename_dict[col_sku] = 'SKU'
@@ -124,13 +130,13 @@ with tab_picking:
                         if 'CANTIDAD' not in df_limpio.columns: df_limpio['CANTIDAD'] = 1
                         
                     elif plat == 'TIKTOK':
-                        col_order = cols_map.get('order id')
-                        col_sku = cols_map.get('seller sku')
-                        col_nombre = cols_map.get('product name')
-                        col_var = cols_map.get('variation')
-                        col_cant = cols_map.get('quantity')
-                        columnas_utiles = [c for c in [col_order, col_sku, col_nombre, col_var, col_cant] if c]
-                        df_limpio = df_temp[columnas_utiles].copy()
+                        col_order = cols_map.get('order id', cols_map.get('id de pedido'))
+                        col_sku = cols_map.get('seller sku', cols_map.get('sku del vendedor', cols_map.get('sku')))
+                        col_nombre = cols_map.get('product name', cols_map.get('nombre del producto'))
+                        col_var = cols_map.get('variation', cols_map.get('variacion'))
+                        col_cant = cols_map.get('quantity', cols_map.get('cantidad'))
+                        
+                        df_limpio = df_temp[[c for c in [col_order, col_sku, col_nombre, col_var, col_cant] if c]].copy()
                         if col_order: df_limpio['PEDIDO'] = df_limpio[col_order].astype(str).str.strip()
                         rename_dict = {}
                         if col_sku: rename_dict[col_sku] = 'SKU'
@@ -141,12 +147,12 @@ with tab_picking:
                         if 'CANTIDAD' not in df_limpio.columns: df_limpio['CANTIDAD'] = 1
 
                     elif plat == 'SHEIN':
-                        col_pedido = cols_map.get('número de pedido', cols_map.get('numero de pedido'))
-                        col_sku = cols_map.get('sku del vendedor')
+                        col_pedido = cols_map.get('numero de pedido')
+                        col_sku = cols_map.get('sku del vendedor', cols_map.get('sku'))
                         col_nombre = cols_map.get('nombre del producto')
-                        col_var = cols_map.get('especificación', cols_map.get('especificacion'))
-                        columnas_utiles = [c for c in [col_pedido, col_sku, col_nombre, col_var] if c]
-                        df_limpio = df_temp[columnas_utiles].copy()
+                        col_var = cols_map.get('especificacion')
+                        
+                        df_limpio = df_temp[[c for c in [col_pedido, col_sku, col_nombre, col_var] if c]].copy()
                         df_limpio['CANTIDAD'] = 1
                         if col_pedido: df_limpio['PEDIDO'] = df_limpio[col_pedido].astype(str).str.strip()
                         rename_dict = {}
@@ -161,13 +167,13 @@ with tab_picking:
 
                 if not dataframes_limpios: st.stop()
 
-                # --- UNIFICACIÓN Y FILTRO INTELIGENTE ORIGINAL ---
+                # --- UNIFICACIÓN Y TU FILTRO ANTI-BASURA ORIGINAL ---
                 df_total = pd.concat(dataframes_limpios, ignore_index=True)
                 df_total = df_total.dropna(subset=['PEDIDO'])
                 df_total['PEDIDO'] = df_total['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '')).str.strip()
                 df_total['SKU'] = df_total['SKU'].astype(str).str.strip()
                 
-                # TU MAGIA ORIGINAL QUE BORRA LA BASURA DE TIKTOK AUTOMÁTICAMENTE
+                # LA MAGIA DE ALEJANDRO: Esto borra las cabeceras extras de TikTok solitas
                 df_total['CANTIDAD'] = pd.to_numeric(df_total.get('CANTIDAD', pd.Series(dtype=int)), errors='coerce').fillna(0)
                 df_total = df_total[df_total['CANTIDAD'] > 0]
                 
@@ -246,12 +252,12 @@ with tab_robot:
             with st.spinner("Aplicando tu lógica de división original..."):
                 paginas_por_pedido = {} 
                 
-                # --- PROCESAR TIKTOK FASE 2 (LÓGICA ORIGINAL) ---
+                # --- PROCESAR TIKTOK FASE 2 ---
                 if pdf_tiktok and tiktok_csv_2:
                     plat, conf = detectar_plataforma_web(tiktok_csv_2)
                     tiktok_csv_2.seek(0)
-                    if tiktok_csv_2.name.endswith('.xlsx'):
-                        df_tk2 = pd.read_excel(tiktok_csv_2, skiprows=conf if isinstance(conf, int) else 0)
+                    if isinstance(conf, int): 
+                        df_tk2 = pd.read_excel(tiktok_csv_2, skiprows=conf)
                     else:
                         texto_csv = tiktok_csv_2.getvalue().decode(conf)
                         skip = 0
@@ -263,9 +269,9 @@ with tab_robot:
                     
                     cols_tk = {c.lower().strip(): c for c in df_tk2.columns}
                     
-                    # LLAVE ORIGINAL TIKTOK JMX
-                    col_order = cols_tk.get('order id')
-                    col_track = cols_tk.get('tracking id')
+                    # LECTURA ORIGINAL PARA EL CRUCE DE JMX
+                    col_order = cols_tk.get('order id', cols_tk.get('id de pedido'))
+                    col_track = cols_tk.get('tracking id', cols_tk.get('id de seguimiento'))
                     
                     if col_order and col_track:
                         mapa_jmx = {}
