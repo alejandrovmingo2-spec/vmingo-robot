@@ -149,6 +149,7 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limit
             emp_idx += 1
                 
     df_total['ASIGNADO_A'] = df_total['PEDIDO'].map(asignaciones)
+
     return df_total, top_5_skus
 
 st.title("🤖 Vmingo ERP: Coordinador Logístico Multiplataforma")
@@ -276,7 +277,7 @@ with tab1:
 # =====================================================================
 with tab2:
     st.markdown("### 2. Generador de Guías y Tickets de Empaque")
-    st.info("💡 Sube los MISMOS CSVs de la mañana. Se generará UN TICKET UNIFICADO por empleado.")
+    st.info("💡 Sube los MISMOS CSVs de la mañana para cuadrar matemáticas. Aparte, sube el JMX y los PDFs.")
     
     col_t2, col_s2, col_k2 = st.columns(3)
     with col_t2:
@@ -302,7 +303,7 @@ with tab2:
         
         if not csvs: st.error("Sube los CSVs base para armar la matemática.")
         else:
-            with st.spinner("Cortando guías y recuperando pedidos perdidos..."):
+            with st.spinner("Localizando TODOS los formatos de Temu y cruzando guías..."):
                 dicc_nom2, dicc_tipo2 = {}, {}
                 if f_base2:
                     try:
@@ -319,7 +320,6 @@ with tab2:
                 dfs2 = [procesar_csv(a, detectar_plataforma_csv(a)[0], detectar_plataforma_csv(a)[1]) for a in csvs]
                 df_matriz, _ = unificar_y_distribuir(dfs2, emps2, dicc_nom2, dicc_tipo2, limite_cajas=15)
                 
-                # --- MAPEO DE JMX PARA TIKTOK ---
                 mapa_pedidos_tiktok = {}
                 df_tk_main = df_matriz[df_matriz['PLATAFORMA'] == 'TIKTOK']
                 for _, r in df_tk_main.iterrows():
@@ -346,9 +346,7 @@ with tab2:
 
                 paginas_por_pedido = {}
                 
-                # =========================================================
-                # CEREBRO 1: TIKTOK (MATCH DIRECTO CON EXCEL)
-                # =========================================================
+                # CEREBRO 1: TIKTOK
                 if pdf_k2: 
                     reader_tk = PyPDF2.PdfReader(pdf_k2)
                     temp_pages = {}
@@ -384,27 +382,45 @@ with tab2:
                             if pag not in paginas_por_pedido[pedido_real]: paginas_por_pedido[pedido_real].append(pag)
 
                 # =========================================================
-                # CEREBRO 2: TEMU (MEMORIA ADHESIVA RESTAURADA)
+                # CEREBRO 2: TEMU (INYECCIÓN DE BÚSQUEDA NUMÉRICA EXACTA)
                 # =========================================================
-                if pdf_t2: 
+                if pdf_t2:
                     reader_temu = PyPDF2.PdfReader(pdf_t2)
                     po_actual = None
-                    for pagina in reader_temu.pages:
+                    
+                    # Extraemos la lista EXACTA de todos los pedidos de Temu del CSV
+                    pedidos_temu = [str(x).replace('.0','').strip().upper() for x in df_matriz[df_matriz['PLATAFORMA'] == 'TEMU']['PEDIDO'] if x and str(x) != 'NAN']
+
+                    for i, pagina in enumerate(reader_temu.pages):
                         txt_puro = pagina.extract_text() or ""
                         txt_limpio = txt_puro.replace(" ", "").replace("\n", "").upper()
-                        matches = re.findall(r'(PO-[\d\-A-Z]+)', txt_limpio)
-                        if matches:
-                            po_actual = str(matches[0]).strip()
+
+                        po_encontrado = None
+                        
+                        # 1. PASO NUEVO: Buscar si el número de pedido exacto (ej. 769614...) está en el texto
+                        for ped in pedidos_temu:
+                            if ped in txt_limpio:
+                                po_encontrado = ped
+                                break
+
+                        # 2. PASO ORIGINAL: Si no lo encontró exacto, busca el patrón PO-
+                        if not po_encontrado:
+                            matches = re.findall(r'(PO-[\d\-A-Z]+)', txt_limpio)
+                            if matches: po_encontrado = str(matches[0]).strip()
+
+                        if po_encontrado:
+                            po_actual = po_encontrado
                             if po_actual not in paginas_por_pedido:
                                 paginas_por_pedido[po_actual] = []
-                        
-                        if po_actual:
+                                # TU CÓDIGO ORIGINAL QUE JALA LA HOJA ANTERIOR PARA PEGAR EL DETALLE CON LA ETIQUETA
+                                if i > 0 and reader_temu.pages[i-1] not in paginas_por_pedido[po_actual]:
+                                    paginas_por_pedido[po_actual].append(reader_temu.pages[i-1])
+
                             if pagina not in paginas_por_pedido[po_actual]:
                                 paginas_por_pedido[po_actual].append(pagina)
 
-                # =========================================================
-                # CEREBRO 3: SHEIN (REGLA DE DECLARACIÓN)
-                # =========================================================
+
+                # CEREBRO 3: SHEIN
                 if pdf_s2: 
                     reader_shein = PyPDF2.PdfReader(pdf_s2)
                     chunks_pdf = []
@@ -413,7 +429,6 @@ with tab2:
                         txt_puro = pagina.extract_text() or ""
                         txt_upper = txt_puro.upper().replace(" ", "").replace("\n", "")
                         
-                        # Si la hoja NO es una declaración, obligatoriamente empieza un pedido nuevo
                         es_declaracion = re.search(r'(DECLARACI|CUSTOMS|INVOICE)', txt_upper)
                         
                         if not es_declaracion:
@@ -492,7 +507,7 @@ with tab2:
                                     hoja_ticket.merge_range(fila, 1, fila, 2, 'Total Empaque', fmt_total)
                                     hoja_ticket.write(fila, 3, total_piezas, fmt_total)
                                     
-                                    hoja_ticket.set_column('A:A', 4); hoja_ticket.set_column('B:B', 16); hoja_ticket.set_column('C:C', 38); hoja_ticket.set_column('D:D', 6)
+                                    hoja_ticket.set_column('A:A', 4); hoja_ticket.set_column('B:B', 16); hoja_ticket.set_column('C:C', 38); পণ্ডিতhoja_ticket.set_column('D:D', 6)
                                     hoja_ticket.set_row(3, 30); hoja_ticket.set_row(1, 25) 
                                     hoja_ticket.fit_to_pages(1, 0); hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1)
                                 
