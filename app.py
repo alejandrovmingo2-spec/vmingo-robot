@@ -26,7 +26,7 @@ def detectar_plataforma_csv(archivo_csv_buffer):
             for linea in lineas[:5]:
                 lin_low = linea.lower()
                 if 'id del pedido' in lin_low and 'sku de contribución' in lin_low: return 'TEMU', cod
-                if ('order id' in lin_low or 'id de pedido' in lin_low) and ('seller sku' in lin_low or 'sku del vendedor' in lin_low): return 'TIKTOK', cod
+                if ('order id' in lin_low or 'id de pedido' in lin_low) and ('seller sku' in lin_low or 'sku del vendedor' in lin_low or 'tracking id' in lin_low or 'id de seguimiento' in lin_low): return 'TIKTOK', cod
                 if 'número de pedido' in lin_low and 'sku del vendedor' in lin_low: return 'SHEIN', cod
         except: pass
     return 'DESCONOCIDA', None
@@ -74,10 +74,11 @@ def procesar_csv(archivo, plataforma, codificacion):
         df_f['CANTIDAD'] = 1
         
     df_f['PLATAFORMA'] = plataforma
+    df_f['ORDEN_ORIGINAL'] = range(len(df_f)) 
     if 'TRACKING_ID' not in df_f.columns: df_f['TRACKING_ID'] = ""
     return df_f
 
-def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limite_sku=15):
+def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limite_cajas=15):
     df_total = pd.concat(dataframes, ignore_index=True)
     df_total['PEDIDO'] = df_total['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
     df_total['SKU'] = df_total['SKU'].astype(str).str.strip()
@@ -94,28 +95,53 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limit
     df_single = df_total[df_total['TIPOS_PRODUCTO'] == 1]
     top_5_skus = df_single.groupby('SKU')['CANTIDAD'].sum().nlargest(5).index.tolist()
     
-    df_total['CATEGORIA'] = df_total.apply(
-        lambda r: 'AVALANCHA' if (r['TIPOS_PRODUCTO'] == 1 and r['SKU'] in top_5_skus) else 'CARRITO', axis=1
-    )
-    
     asignaciones = {}
     emp_idx = 0
     num_emp = len(empleados)
     
-    for cat in ['AVALANCHA', 'CARRITO']:
-        df_cat = df_total[df_total['CATEGORIA'] == cat].copy()
-        sku_volumen = df_cat.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False)
-        skus_ordenados = sku_volumen.index.tolist()
-        
-        for sku in skus_ordenados:
-            pedidos_sku = df_cat[df_cat['SKU'] == sku]['PEDIDO'].unique().tolist()
-            for i in range(0, len(pedidos_sku), limite_sku):
-                chunk = pedidos_sku[i : i + limite_sku]
-                empleado_asignado = empleados[emp_idx % num_emp]
-                for p in chunk: asignaciones[p] = empleado_asignado
-                emp_idx += 1 
+    # LEY 1: AVALANCHA TOP 5 (Se reparte rápido y por igual, como baraja)
+    pedidos_ava = df_single[df_single['SKU'].isin(top_5_skus)]['PEDIDO'].unique().tolist()
+    pedidos_ava.sort()
+    for p in pedidos_ava:
+        asignaciones[p] = empleados[emp_idx % num_emp]
+        emp_idx += 1
+
+    # LEY 2: MINI-AVALANCHAS "CAJA" (1 pieza, es CAJA, Límite de 15)
+    df_mini_caja = df_single[(~df_single['SKU'].isin(top_5_skus)) & (df_single['TIPO'] == 'CAJA')]
+    sku_vol_caja = df_mini_caja.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False).index.tolist()
+    for sku in sku_vol_caja:
+        peds_sku = df_mini_caja[df_mini_caja['SKU'] == sku]['PEDIDO'].unique().tolist()
+        peds_sku.sort()
+        for i in range(0, len(peds_sku), limite_cajas):
+            chunk = peds_sku[i : i + limite_cajas]
+            emp_asignado = empleados[emp_idx % num_emp]
+            for p in chunk: asignaciones[p] = emp_asignado
+            emp_idx += 1
+
+    # LEY 3: MINI-AVALANCHAS NORMALES (1 pieza, NORMAL, TODO a 1 sola persona en totales)
+    df_mini_norm = df_single[(~df_single['SKU'].isin(top_5_skus)) & (df_single['TIPO'] != 'CAJA')]
+    sku_vol_norm = df_mini_norm.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False).index.tolist()
+    for sku in sku_vol_norm:
+        peds_sku = df_mini_norm[df_mini_norm['SKU'] == sku]['PEDIDO'].unique().tolist()
+        emp_asignado = empleados[emp_idx % num_emp] # Se asigna TODO a este empleado
+        for p in peds_sku: asignaciones[p] = emp_asignado
+        emp_idx += 1
+
+    # LEY 4: CARRITOS MIXTOS (Múltiples productos. Se reparten por igual para no romper carritos)
+    df_mixtos = df_total[df_total['TIPOS_PRODUCTO'] > 1]
+    pedidos_mixtos = df_mixtos['PEDIDO'].unique().tolist()
+    pedidos_mixtos.sort()
+    for p in pedidos_mixtos:
+        asignaciones[p] = empleados[emp_idx % num_emp]
+        emp_idx += 1
                 
     df_total['ASIGNADO_A'] = df_total['PEDIDO'].map(asignaciones)
+
+    # Clasificamos al final solo para que el código sepa qué poner en Avalancha vs Ticket Térmico
+    df_total['CATEGORIA'] = df_total.apply(
+        lambda r: 'AVALANCHA' if (r['TIPOS_PRODUCTO'] == 1 and r['SKU'] in top_5_skus) else 'CARRITO', axis=1
+    )
+
     return df_total, top_5_skus
 
 st.title("🤖 Vmingo ERP: Coordinador Logístico Multiplataforma")
@@ -130,7 +156,7 @@ with tab1:
     col_t, col_s, col_k = st.columns(3)
     with col_t: f_t = st.file_uploader("CSV TEMU", type=["csv"], key="t1")
     with col_s: f_s = st.file_uploader("CSV SHEIN", type=["csv"], key="s1")
-    with col_k: f_k = st.file_uploader("CSV TIKTOK 1", type=["csv"], key="k1")
+    with col_k: f_k = st.file_uploader("CSV TIKTOK", type=["csv"], key="k1")
     
     col_b, col_e = st.columns([1, 2])
     with col_b: f_base = st.file_uploader("BASE (Con columna TIPO)", type=["xlsx", "xlsm"], key="b1")
@@ -141,14 +167,13 @@ with tab1:
         emps = [e.strip().upper() for e in e_in.split(',') if e.strip()]
         if not archs or not emps: st.error("Faltan datos. Sube CSVs y escribe los nombres.")
         else:
-            with st.spinner("Licuando datos, asignando y armando tickets exclusivos..."):
+            with st.spinner("Licuando datos bajo las 4 Leyes Logísticas..."):
                 dicc_nom, dicc_tipo = {}, {}
                 if f_base:
                     try:
                         df_b = pd.read_excel(f_base, sheet_name='BASE')
                     except Exception:
                         df_b = pd.read_excel(f_base)
-                        
                     df_b.columns = df_b.columns.str.strip().str.upper()
                     for _, r in df_b.iterrows():
                         s = str(r.get('SKU','')).strip()
@@ -157,7 +182,7 @@ with tab1:
                             dicc_tipo[s] = str(r.get('TIPO','NORMAL')).strip().upper()
 
                 dfs = [procesar_csv(a, detectar_plataforma_csv(a)[0], detectar_plataforma_csv(a)[1]) for a in archs]
-                df_final, top5 = unificar_y_distribuir(dfs, emps, dicc_nom, dicc_tipo, limite_sku=15)
+                df_final, top5 = unificar_y_distribuir(dfs, emps, dicc_nom, dicc_tipo, limite_cajas=15)
                 
                 total_pedidos = df_final['PEDIDO'].nunique()
                 total_piezas = int(df_final['CANTIDAD'].sum())
@@ -225,37 +250,38 @@ with tab1:
                             hoja_ticket.set_row(3, 30); hoja_ticket.set_row(1, 25) 
                             hoja_ticket.fit_to_pages(1, 0); hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1)
                 
-                st.success("✅ ¡Tickets generados en orden alfabético y separados correctamente!")
+                st.success("✅ ¡Tickets generados listos para imprimir!")
                 st.download_button("📥 Descargar Picking Fase 1", output.getvalue(), f"Picking_Termico_{datetime.now().strftime('%d-%m-%Y')}.xlsx", "application/vnd.ms-excel")
 
 # =====================================================================
-# FASE 2: EMPAQUE Y MULTI-PDF (RESTAURADOS TUS 3 CEREBROS ORIGINALES)
+# FASE 2: EMPAQUE Y MULTI-PDF 
 # =====================================================================
 with tab2:
     st.markdown("### 2. Generador de Guías y Tickets de Empaque")
-    st.info("💡 Sube los mismos CSVs para recalcular, y a lado los PDFs de las guías.")
+    st.info("💡 Sube los MISMOS CSVs de la mañana para cuadrar matemáticas. Aparte, sube el JMX y los PDFs para las guías.")
     
-    c1, c2, c3 = st.columns(3)
-    with c1:
+    col_t2, col_s2, col_k2 = st.columns(3)
+    with col_t2:
         st.write("🔴 **TEMU**")
-        csv_t2 = st.file_uploader("CSV Temu", type=["csv"], key="ct2")
+        csv_t2 = st.file_uploader("CSV Temu (Mismo de F1)", type=["csv"], key="ct2")
         pdf_t2 = st.file_uploader("PDF Temu", type=["pdf"], key="pt2")
-    with c2:
+    with col_s2:
         st.write("🟢 **SHEIN**")
-        csv_s2 = st.file_uploader("CSV Shein", type=["csv"], key="cs2")
+        csv_s2 = st.file_uploader("CSV Shein (Mismo de F1)", type=["csv"], key="cs2")
         pdf_s2 = st.file_uploader("PDF Shein", type=["pdf"], key="ps2")
-    with c3:
+    with col_k2:
         st.write("🔵 **TIKTOK**")
-        csv_k2 = st.file_uploader("CSV TikTok 2 (JMX)", type=["csv"], key="ck2")
+        csv_k2 = st.file_uploader("CSV TikTok (Mismo de F1)", type=["csv"], key="ck2")
+        csv_jmx = st.file_uploader("CSV TikTok JMX (Opcional)", type=["csv"], key="cjmx")
         pdf_k2 = st.file_uploader("PDF TikTok", type=["pdf"], key="pk2")
     
     f_base2 = st.file_uploader("BASE", type=["xlsx", "xlsm"], key="b2")
 
     if st.button("✂️ Cortar y Generar Archivos de Empaque", type="primary"):
         csvs = [f for f in [csv_t2, csv_s2, csv_k2] if f is not None]
-        if not csvs: st.error("Sube los CSVs para armar la matemática base.")
+        if not csvs: st.error("Sube los CSVs base para armar la matemática.")
         else:
-            with st.spinner("Leyendo PDFs con tus funciones originales exactas..."):
+            with st.spinner("Cruzando plataformas con funciones originales..."):
                 dicc_nom2, dicc_tipo2 = {}, {}
                 if f_base2:
                     try:
@@ -271,89 +297,77 @@ with tab2:
 
                 dfs2 = [procesar_csv(a, detectar_plataforma_csv(a)[0], detectar_plataforma_csv(a)[1]) for a in csvs]
                 emps2 = [e.strip().upper() for e in e_in.split(',') if e.strip()]
-                df_matriz, _ = unificar_y_distribuir(dfs2, emps2, dicc_nom2, dicc_tipo2, limite_sku=15)
+                df_matriz, _ = unificar_y_distribuir(dfs2, emps2, dicc_nom2, dicc_tipo2, limite_cajas=15)
                 
+                # --- MAPEO DE JMX PARA TIKTOK ---
+                mapa_jmx_to_pedido = {}
+                mapa_pedido_to_jmx = {}
+                if csv_jmx:
+                    plat_jmx, cod_jmx = detectar_plataforma_csv(csv_jmx)
+                    if plat_jmx == 'TIKTOK':
+                        df_jmx = procesar_csv(csv_jmx, 'TIKTOK', cod_jmx)
+                        for _, r in df_jmx.iterrows():
+                            ped = str(r.get('PEDIDO','')).replace('.0','').strip()
+                            trk = str(r.get('TRACKING_ID','')).replace('.0','').strip()
+                            if ped and trk and ped != 'nan' and trk != 'nan': 
+                                mapa_jmx_to_pedido[trk] = ped
+                                mapa_pedido_to_jmx[ped] = trk
+                            
+                df_matriz['TRACKING_ID'] = df_matriz.apply(
+                    lambda r: mapa_pedido_to_jmx.get(r['PEDIDO'], r.get('TRACKING_ID', '')) if r['PLATAFORMA'] == 'TIKTOK' else r.get('TRACKING_ID', ''), 
+                    axis=1
+                )
+
                 paginas_por_pedido = {}
                 
-                # =================================================================
-                # CEREBRO 1 ORIGINAL: TIKTOK CON DICCIONARIO
-                # =================================================================
-                if pdf_k2 and csv_k2:
-                    df_tk_raw = procesar_csv(csv_k2, 'TIKTOK', detectar_plataforma_csv(csv_k2)[1])
-                    mapa_pedidos_tiktok = {}
-                    for _, r in df_tk_raw.iterrows():
-                        order_id = str(r.get('PEDIDO', '')).replace('.0', '').strip()
-                        tracking_id = str(r.get('TRACKING_ID', '')).replace('.0', '').strip()
-                        if order_id and order_id != 'nan': mapa_pedidos_tiktok[order_id] = order_id
-                        if tracking_id and tracking_id != 'nan': mapa_pedidos_tiktok[tracking_id] = order_id
-                    
-                    reader_tk = PyPDF2.PdfReader(pdf_k2)
+                if pdf_k2: 
+                    reader = PyPDF2.PdfReader(pdf_k2)
+                    jmx_actual = None
                     temp_pages = {}
-                    po_actual = None
-                    for p in reader_tk.pages:
-                        txt = p.extract_text() or ""
-                        matches = re.findall(r'(JMX\d+)', txt)
-                        if matches:
-                            po_actual = str(matches[0]).strip()
-                            if po_actual not in temp_pages: temp_pages[po_actual] = []
-                            if p not in temp_pages[po_actual]: temp_pages[po_actual].append(p)
-                        else:
-                            if po_actual:
-                                if p not in temp_pages[po_actual]: temp_pages[po_actual].append(p)
-                                
+                    for p in reader.pages:
+                        m = re.findall(r'(JMX\d+)', p.extract_text() or "")
+                        if m: 
+                            jmx_actual = str(m[0]).strip()
+                            if jmx_actual not in temp_pages: temp_pages[jmx_actual] = []
+                        if jmx_actual: 
+                            if p not in temp_pages[jmx_actual]: temp_pages[jmx_actual].append(p)
+                            
                     for jmx_key, pags in temp_pages.items():
-                        order_id = mapa_pedidos_tiktok.get(jmx_key, jmx_key)
-                        if order_id not in paginas_por_pedido: paginas_por_pedido[order_id] = []
+                        pedido_real = mapa_jmx_to_pedido.get(jmx_key, jmx_key)
+                        if pedido_real not in paginas_por_pedido: paginas_por_pedido[pedido_real] = []
                         for pag in pags:
-                            if pag not in paginas_por_pedido[order_id]: paginas_por_pedido[order_id].append(pag)
+                            if pag not in paginas_por_pedido[pedido_real]: paginas_por_pedido[pedido_real].append(pag)
 
-                # =================================================================
-                # CEREBRO 2 ORIGINAL: TEMU CON "ELSE: PASS"
-                # =================================================================
                 if pdf_t2: 
-                    reader_temu = PyPDF2.PdfReader(pdf_t2)
+                    reader = PyPDF2.PdfReader(pdf_t2)
                     po_actual = None
-                    for num_pagina, pagina in enumerate(reader_temu.pages):
-                        texto = pagina.extract_text() or ""
-                        matches = re.findall(r'(PO-\d{3}-\d+)', texto)
-                        if matches:
-                            po_actual = str(matches[0]).strip()
-                            if po_actual not in paginas_por_pedido:
+                    for i, p in enumerate(reader.pages):
+                        m = re.findall(r'(PO-\d{3}-\d+)', p.extract_text() or "")
+                        if m: 
+                            po_actual = str(m[0]).strip()
+                            if po_actual not in paginas_por_pedido: 
                                 paginas_por_pedido[po_actual] = []
-                                if num_pagina > 0:
-                                    if reader_temu.pages[num_pagina - 1] not in paginas_por_pedido[po_actual]:
-                                        paginas_por_pedido[po_actual].append(reader_temu.pages[num_pagina - 1])
-                            if pagina not in paginas_por_pedido[po_actual]:
-                                paginas_por_pedido[po_actual].append(pagina)
+                                if i > 0 and reader.pages[i-1] not in paginas_por_pedido[po_actual]:
+                                    paginas_por_pedido[po_actual].append(reader.pages[i-1])
+                            if p not in paginas_por_pedido[po_actual]:
+                                paginas_por_pedido[po_actual].append(p)
                         else:
-                            pass # IGNORAR HOJAS EXTRA COMO EN TU CÓDIGO ORIGINAL
+                            pass
 
-                # =================================================================
-                # CEREBRO 3 ORIGINAL: SHEIN CON POSICIONES REALES DEL CSV
-                # =================================================================
-                if pdf_s2 and csv_s2:
-                    df_sh_raw = procesar_csv(csv_s2, 'SHEIN', detectar_plataforma_csv(csv_s2)[1])
-                    pos_finales_reales = list(dict.fromkeys(df_sh_raw['PEDIDO'].tolist()))
-                    
-                    reader_shein = PyPDF2.PdfReader(pdf_s2)
-                    chunks_pdf = []
-                    chunk_actual = []
-                    for pagina in reader_shein.pages:
-                        texto_upper = (pagina.extract_text() or "").upper()
-                        es_declaracion = 'DECLARACIÓN DE CONTENIDO' in texto_upper
-                        tiene_indicadores = re.search(r'(JMX|GSH|J&T|TODOOR|D2D)', texto_upper)
-                        
-                        if tiene_indicadores and not es_declaracion:
-                            if chunk_actual: chunks_pdf.append(chunk_actual)
-                            chunk_actual = [pagina]
-                        else:
-                            if chunk_actual: chunk_actual.append(pagina)
-                            else: chunk_actual = [pagina]
-                    if chunk_actual: chunks_pdf.append(chunk_actual)
-                    
-                    for i, pedido_gsh in enumerate(pos_finales_reales):
-                        if i < len(chunks_pdf):
-                            paginas_por_pedido[pedido_gsh] = chunks_pdf[i]
+                if pdf_s2: 
+                    reader = PyPDF2.PdfReader(pdf_s2)
+                    chunks = []
+                    cur = []
+                    for p in reader.pages:
+                        txt = p.extract_text() or ""
+                        if re.search(r'(JMX|GSH|J&T|TODOOR|D2D)', txt.upper()) and 'DECLARACIÓN' not in txt.upper():
+                            if cur: chunks.append(cur)
+                            cur = [p]
+                        else: cur.append(p)
+                    if cur: chunks.append(cur)
+                    peds_s = df_matriz[df_matriz['PLATAFORMA'] == 'SHEIN'].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique()
+                    for i, ped in enumerate(peds_s):
+                        if i < len(chunks): paginas_por_pedido[ped] = chunks[i]
 
                 total_encontrados = len(paginas_por_pedido)
                 st.metric("🎯 Guías Físicas Encontradas y Cortadas", total_encontrados)
@@ -365,7 +379,6 @@ with tab2:
                     excel_buf = io.BytesIO()
                     with pd.ExcelWriter(excel_buf, engine='xlsxwriter') as writer:
                         
-                        # HOJA AVALANCHA DE AUDITORÍA (LISTADO EXACTO)
                         df_asig_ava2 = df_matriz[df_matriz['CATEGORIA'] == 'AVALANCHA'].copy()
                         if not df_asig_ava2.empty:
                             df_asig_ava2 = df_asig_ava2[['ASIGNADO_A', 'PEDIDO', 'TRACKING_ID', 'PLATAFORMA', 'SKU', 'Nombre Correcto']]
