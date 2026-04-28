@@ -99,13 +99,14 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limit
         lambda r: 'AVALANCHA' if (r['TIPOS_PRODUCTO'] == 1 and r['SKU'] in top_5_skus) else 'CARRITO', axis=1
     )
     
-    # REPARTICIÓN CON LÍMITE DE 15 PIEZAS ORDENADO POR VOLUMEN
+    # REPARTICIÓN CON LÍMITE DE 15 PIEZAS ORDENADO POR VOLUMEN DE MAYOR A MENOR
     asignaciones = {}
     emp_idx = 0
     num_emp = len(empleados)
     
     for cat in ['AVALANCHA', 'CARRITO']:
         df_cat = df_total[df_total['CATEGORIA'] == cat].copy()
+        
         sku_volumen = df_cat.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False)
         skus_ordenados = sku_volumen.index.tolist()
         
@@ -147,7 +148,6 @@ with tab1:
                 dicc_nom, dicc_tipo = {}, {}
                 if f_base:
                     try:
-                        # BLINDAJE: Busca específicamente la pestaña 'BASE'
                         df_b = pd.read_excel(f_base, sheet_name='BASE')
                     except Exception:
                         df_b = pd.read_excel(f_base)
@@ -190,7 +190,6 @@ with tab1:
                     
                     # 3. Tickets Térmicos de Surtido por Empleado (SOLO CARRITOS)
                     for i, e in enumerate(emps):
-                        # Filtramos estrictamente a CARRITO para no mezclar
                         df_e = df_final[(df_final['ASIGNADO_A'] == e) & (df_final['CATEGORIA'] == 'CARRITO')].groupby(['SKU','Nombre Correcto','TIPO'])['CANTIDAD'].sum().reset_index()
                         if not df_e.empty:
                             df_e = df_e.sort_values(by=['TIPO','CANTIDAD'], ascending=[False, False]).reset_index(drop=True)
@@ -331,16 +330,24 @@ with tab2:
                 with zipfile.ZipFile(zip_buf, "a", zipfile.ZIP_DEFLATED, False) as zf:
                     excel_buf = io.BytesIO()
                     with pd.ExcelWriter(excel_buf, engine='xlsxwriter') as writer:
+                        
+                        # 1. Pestaña global de Avalancha en la Fase 2 (Auditoría completa)
+                        df_asig_ava2 = df_matriz[df_matriz['CATEGORIA'] == 'AVALANCHA'].groupby(['ASIGNADO_A', 'SKU', 'Nombre Correcto'])['CANTIDAD'].sum().reset_index()
+                        if not df_asig_ava2.empty:
+                            df_asig_ava2 = df_asig_ava2.sort_values(by=['ASIGNADO_A', 'CANTIDAD'], ascending=[True, False])
+                            df_asig_ava2.rename(columns={'ASIGNADO_A': 'EMPLEADO'}, inplace=True)
+                            df_asig_ava2.to_excel(writer, sheet_name='⚡ ASIGNACION AVALANCHA', index=False)
+                        
                         for i, e in enumerate(emps2):
                             df_e = df_matriz[df_matriz['ASIGNADO_A'] == e].copy()
                             df_e = df_e[df_e['PEDIDO'].isin(paginas_por_pedido.keys())]
                             color_actual = colores_division[i % len(colores_division)]
                             
                             if not df_e.empty:
-                                # 1. Hoja Auditoría (Para tu control en PC)
+                                # 2. Hoja Auditoría (Para tu control en PC)
                                 df_e[['PEDIDO','TRACKING_ID','PLATAFORMA','SKU','Nombre Correcto','CANTIDAD', 'CATEGORIA']].to_excel(writer, sheet_name=e, index=False)
                                 
-                                # 2. Hoja Ticket Térmico de Empaque (Exclusivo CARRITOS)
+                                # 3. Hoja Ticket Térmico de Empaque (Exclusivo CARRITOS)
                                 df_ticket = df_e[df_e['CATEGORIA'] == 'CARRITO'].copy()
                                 if not df_ticket.empty:
                                     picking_list = df_ticket.groupby(['SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
