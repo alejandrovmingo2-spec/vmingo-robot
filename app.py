@@ -9,7 +9,7 @@ from datetime import datetime
 st.set_page_config(page_title="Vmingo ERP - Robot Almacén", page_icon="🤖", layout="wide")
 
 # =====================================================================
-# FUNCIONES MATEMÁTICAS Y DE EXTRACCIÓN (TU CÓDIGO ORIGINAL INTACTO)
+# FUNCIONES MATEMÁTICAS Y DE EXTRACCIÓN
 # =====================================================================
 def limpiar_nombre(texto):
     idx = texto.lower().find('detalle')
@@ -26,7 +26,7 @@ def detectar_plataforma_csv(archivo_csv_buffer):
             for linea in lineas[:5]:
                 lin_low = linea.lower()
                 if 'id del pedido' in lin_low and 'sku de contribución' in lin_low: return 'TEMU', cod
-                if 'order id' in lin_low and 'seller sku' in lin_low: return 'TIKTOK', cod
+                if ('order id' in lin_low or 'id de pedido' in lin_low) and ('seller sku' in lin_low or 'sku del vendedor' in lin_low): return 'TIKTOK', cod
                 if 'número de pedido' in lin_low and 'sku del vendedor' in lin_low: return 'SHEIN', cod
         except: pass
     return 'DESCONOCIDA', None
@@ -38,13 +38,14 @@ def procesar_csv(archivo, plataforma, codificacion):
     for i, linea in enumerate(texto_csv.splitlines()):
         lin_low = linea.lower()
         if (plataforma == 'TEMU' and 'id del pedido' in lin_low) or \
-           (plataforma == 'TIKTOK' and 'order id' in lin_low) or \
+           (plataforma == 'TIKTOK' and ('order id' in lin_low or 'id de pedido' in lin_low)) or \
            (plataforma == 'SHEIN' and 'número de pedido' in lin_low):
             skip_lineas = i; break
     archivo.seek(0) 
     
-    # dtype=str para que Excel no rompa los números largos
+    # Tratamos todo como texto para proteger los IDs
     df = pd.read_csv(archivo, skiprows=skip_lineas, encoding=codificacion, dtype=str)
+    df = df.dropna(how='all')
     cols_map = {c.lower().strip(): c for c in df.columns}
     
     df_f = pd.DataFrame()
@@ -54,20 +55,22 @@ def procesar_csv(archivo, plataforma, codificacion):
         col_sku = cols_map.get('sku de contribución', cols_map.get('sku de contribucion'))
         col_nom = cols_map.get('nombre del producto')
         col_cant = cols_map.get('cantidad a enviar')
+        col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento'))
         
         df_f['PEDIDO'] = df[col_pedido] if col_pedido else "TEMU_SD"
         df_f['SKU'] = df[col_sku] if col_sku else ""
         df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
         df_f['CANTIDAD'] = df[col_cant] if col_cant else 1
+        df_f['TRACKING_ID'] = df[col_track] if col_track else ""
         
     elif plataforma == 'TIKTOK':
-        col_order = cols_map.get('order id', cols_map.get('id de pedido'))
+        col_pedido = cols_map.get('order id', cols_map.get('id de pedido'))
         col_sku = cols_map.get('seller sku', cols_map.get('sku del vendedor'))
         col_nom = cols_map.get('product name', cols_map.get('nombre del producto'))
         col_cant = cols_map.get('quantity', cols_map.get('cantidad'))
         col_track = cols_map.get('tracking id', cols_map.get('id de seguimiento'))
         
-        df_f['PEDIDO'] = df[col_order] if col_order else "TK_SD"
+        df_f['PEDIDO'] = df[col_pedido] if col_pedido else "TK_SD"
         df_f['SKU'] = df[col_sku] if col_sku else ""
         df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
         df_f['CANTIDAD'] = df[col_cant] if col_cant else 1
@@ -77,33 +80,33 @@ def procesar_csv(archivo, plataforma, codificacion):
         col_pedido = cols_map.get('número de pedido', cols_map.get('numero de pedido'))
         col_sku = cols_map.get('sku del vendedor')
         col_nom = cols_map.get('nombre del producto')
+        col_track = cols_map.get('número de carta de porte de ida y vuelta', cols_map.get('numero de carta de porte de ida y vuelta'))
         
         df_f['PEDIDO'] = df[col_pedido] if col_pedido else "SH_SD"
         df_f['SKU'] = df[col_sku] if col_sku else ""
         df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
         df_f['CANTIDAD'] = 1
+        df_f['TRACKING_ID'] = df[col_track] if col_track else ""
         
     df_f['PLATAFORMA'] = plataforma
     df_f['ORDEN_ORIGINAL'] = range(len(df_f)) 
-    
-    if 'TRACKING_ID' not in df_f.columns: df_f['TRACKING_ID'] = ""
-    return df_f
+    df_f['PEDIDO'] = df_f['PEDIDO'].fillna('').astype(str).str.strip()
+    return df_f[df_f['PEDIDO'] != '']
 
 # =====================================================================
-# EL CEREBRO DE REPARTICIÓN (A TU MANERA)
+# EL CEREBRO DE REPARTICIÓN (LA LOGÍSTICA EXACTA QUE PEDISTE)
 # =====================================================================
-def unificar_y_distribuir(dataframes, empleados, dicc_nombres):
+def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos):
     df_total = pd.concat(dataframes, ignore_index=True)
-    df_total = df_total.dropna(subset=['PEDIDO'])
-    df_total['PEDIDO'] = df_total['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
-    df_total = df_total[df_total['PEDIDO'] != 'nan']
+    df_total['PEDIDO'] = df_total['PEDIDO'].apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x)
     df_total['SKU'] = df_total['SKU'].astype(str).str.strip()
     df_total['CANTIDAD'] = pd.to_numeric(df_total['CANTIDAD'], errors='coerce').fillna(1)
     df_total = df_total[df_total['CANTIDAD'] > 0] 
     
     df_total['Nombre Correcto'] = df_total['SKU'].apply(lambda x: limpiar_nombre(dicc_nombres.get(x, "SIN NOMBRE EN BASE")))
+    df_total['TIPO'] = df_total['SKU'].apply(lambda x: dicc_tipos.get(x, "NORMAL"))
     
-    # 1. CONTEO GLOBAL DE PRODUCTOS PARA IDENTIFICAR AVALANCHA
+    # 1. EVALUACIÓN GLOBAL (LA AVALANCHA SUPREMA)
     conteo_pedidos = df_total.groupby('PEDIDO')['SKU'].nunique().reset_index()
     conteo_pedidos.columns = ['PEDIDO', 'TIPOS_PRODUCTO']
     df_total = df_total.merge(conteo_pedidos, on='PEDIDO')
@@ -119,12 +122,12 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres):
     emp_idx = 0
     num_emp = len(empleados)
     
-    # 2. REPARTIR POR PARTES (TIENDA POR TIENDA)
+    # 2. PROCESO POR PLATAFORMAS (AISLADO)
     for plat in ['TIKTOK', 'SHEIN', 'TEMU']:
         df_plat = df_total[df_total['PLATAFORMA'] == plat].copy()
         if df_plat.empty: continue
         
-        # A) Primero la Avalancha de esta tienda
+        # --- A) AVALANCHA ---
         df_ava = df_plat[df_plat['CATEGORIA'] == 'AVALANCHA']
         pedidos_ava = df_ava['PEDIDO'].unique().tolist()
         
@@ -135,28 +138,54 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres):
             asignaciones[p] = empleados[emp_idx % num_emp]
             emp_idx += 1
 
-        # B) Regresa por los Carritos, los ORDENA POR CANTIDADES y los reparte
+        # --- B) CARRITOS ---
         df_car = df_plat[df_plat['CATEGORIA'] == 'CARRITO']
-        pedidos_resto = df_car['PEDIDO'].unique().tolist()
         
-        cantidades_por_pedido = df_car.groupby('PEDIDO')['CANTIDAD'].sum().to_dict()
-        
-        if plat == 'SHEIN': 
-            pedidos_resto = df_plat[df_plat['PEDIDO'].isin(pedidos_resto)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
-        else:
-            # Ordena del pedido que lleva más productos al que lleva menos
-            pedidos_resto.sort(key=lambda x: cantidades_por_pedido.get(x, 0), reverse=True)
+        # Regla 1: Pedidos Normales Sencillos (Mismo SKU va a 1 sola persona)
+        df_mini_norm = df_car[(df_car['TIPOS_PRODUCTO'] == 1) & (df_car['TIPO'] != 'CAJA')]
+        sku_vol_norm = df_mini_norm.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False).index.tolist()
+        for sku in sku_vol_norm:
+            peds_sku = df_mini_norm[df_mini_norm['SKU'] == sku]['PEDIDO'].unique().tolist()
+            if plat == 'SHEIN': peds_sku = df_plat[df_plat['PEDIDO'].isin(peds_sku)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
+            else: peds_sku.sort()
             
-        for p in pedidos_resto:
+            emp_asignado = empleados[emp_idx % num_emp] 
+            for p in peds_sku: 
+                asignaciones[p] = emp_asignado
+            emp_idx += 1
+
+        # Regla 2: Pedidos Caja (Se limitan a 15)
+        limite_cajas = 15
+        df_mini_caja = df_car[(df_car['TIPOS_PRODUCTO'] == 1) & (df_car['TIPO'] == 'CAJA')]
+        sku_vol_caja = df_mini_caja.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False).index.tolist()
+        for sku in sku_vol_caja:
+            peds_sku = df_mini_caja[df_mini_caja['SKU'] == sku]['PEDIDO'].unique().tolist()
+            if plat == 'SHEIN': peds_sku = df_plat[df_plat['PEDIDO'].isin(peds_sku)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
+            else: peds_sku.sort()
+            
+            for i in range(0, len(peds_sku), limite_cajas):
+                chunk = peds_sku[i : i + limite_cajas]
+                emp_asignado = empleados[emp_idx % num_emp]
+                for p in chunk: 
+                    asignaciones[p] = emp_asignado
+                emp_idx += 1
+
+        # Regla 3: Pedidos Mixtos (Varios SKUs)
+        df_mixtos = df_car[df_car['TIPOS_PRODUCTO'] > 1]
+        pedidos_mixtos = df_mixtos['PEDIDO'].unique().tolist()
+        if plat == 'SHEIN': pedidos_mixtos = df_plat[df_plat['PEDIDO'].isin(pedidos_mixtos)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
+        else: pedidos_mixtos.sort()
+        
+        for p in pedidos_mixtos:
             asignaciones[p] = empleados[emp_idx % num_emp]
             emp_idx += 1
                 
     df_total['ASIGNADO_A'] = df_total['PEDIDO'].map(asignaciones)
-    return df_total
+    return df_total, top_5_skus
 
 st.title("🤖 Vmingo ERP: Coordinador Logístico Multiplataforma")
 
-tab1, tab2 = st.tabs(["🛒 FASE 1: Picking (Surtido de Almacén)", "📦 FASE 2: Empaque (Cruce PDF y Tickets)"])
+tab1, tab2 = st.tabs(["🛒 FASE 1: Picking (Surtido de Almacén)", "📦 FASE 2: Empaque (Buscador Original)"])
 
 # =====================================================================
 # FASE 1: LISTAS DE RECOLECCIÓN
@@ -169,7 +198,7 @@ with tab1:
     with col_k: f_k = st.file_uploader("CSV TIKTOK", type=["csv"], key="k1")
     
     col_b, col_e = st.columns([1, 2])
-    with col_b: f_base = st.file_uploader("BASE (Opcional)", type=["xlsx", "xlsm"], key="b1")
+    with col_b: f_base = st.file_uploader("BASE (Con columna TIPO)", type=["xlsx", "xlsm"], key="b1")
     with col_e: e_in = st.text_input("Equipo en Turno (Separado por comas):", "ANTONIO, IVAN, CRISTIAN, ALEXIS, OSCAR")
 
     if st.button("📊 Generar Mega-Picking Equitativo", type="primary"):
@@ -179,8 +208,8 @@ with tab1:
         
         if not archs or not emps: st.error("Faltan datos. Sube CSVs y escribe los nombres.")
         else:
-            with st.spinner("Leyendo por partes y ordenando por cantidades..."):
-                dicc_nom = {}
+            with st.spinner("Ejecutando la logística por plataformas..."):
+                dicc_nom, dicc_tipo = {}, {}
                 if f_base:
                     try:
                         df_b = pd.read_excel(f_base, sheet_name='BASE', dtype=str)
@@ -192,9 +221,10 @@ with tab1:
                             s = str(r.get('SKU','')).strip()
                             if s and s != 'nan':
                                 dicc_nom[s] = str(r.get('NOMBRE PLATAFORMA','')).strip()
+                                dicc_tipo[s] = str(r.get('TIPO','NORMAL')).strip().upper()
 
                 dfs = [procesar_csv(a, detectar_plataforma_csv(a)[0], detectar_plataforma_csv(a)[1]) for a in archs]
-                df_final = unificar_y_distribuir(dfs, emps, dicc_nom)
+                df_final, top5 = unificar_y_distribuir(dfs, emps, dicc_nom, dicc_tipo)
                 
                 total_pedidos = df_final['PEDIDO'].nunique()
                 total_piezas = int(df_final['CANTIDAD'].sum())
@@ -273,11 +303,11 @@ with tab1:
                 st.download_button("📥 Descargar Picking Fase 1", output.getvalue(), f"Picking_Termico_{datetime.now().strftime('%d-%m-%Y')}.xlsx", "application/vnd.ms-excel")
 
 # =====================================================================
-# FASE 2: EMPAQUE Y MULTI-PDF (RESTAURANDO TU CÓDIGO ORIGINAL DE PDFs)
+# FASE 2: EMPAQUE Y MULTI-PDF (TU BUSCADOR ORIGINAL)
 # =====================================================================
 with tab2:
     st.markdown("### 2. Generador de Guías y Tickets de Empaque")
-    st.info("💡 Sube los MISMOS CSVs y los PDFs.")
+    st.info("💡 Sube los MISMOS CSVs y los PDFs. Se usará tu Buscador Original.")
     
     col_t2, col_s2, col_k2 = st.columns(3)
     with col_t2:
@@ -291,6 +321,7 @@ with tab2:
     with col_k2:
         st.write("🔵 **TIKTOK**")
         csv_k2 = st.file_uploader("CSV TikTok (F2)", type=["csv"], key="ck2")
+        csv_jmx = st.file_uploader("CSV TikTok JMX (Opcional)", type=["csv"], key="cjmx")
         pdf_k2 = st.file_uploader("PDF TikTok", type=["pdf"], key="pk2")
     
     f_base2 = st.file_uploader("BASE (F2)", type=["xlsx", "xlsm"], key="b2")
@@ -303,7 +334,7 @@ with tab2:
         if not csvs: st.error("Sube los CSVs base para armar la matemática.")
         else:
             with st.spinner("Cortando guías usando el buscador original..."):
-                dicc_nom2 = {}
+                dicc_nom2, dicc_tipo2 = {}, {}
                 if f_base2:
                     try:
                         df_b2 = pd.read_excel(f_base2, sheet_name='BASE', dtype=str)
@@ -313,12 +344,14 @@ with tab2:
                     if 'SKU' in df_b2.columns and 'NOMBRE PLATAFORMA' in df_b2.columns:
                         for _, r in df_b2.iterrows():
                             s = str(r.get('SKU','')).strip()
-                            if s: dicc_nom2[s] = str(r.get('NOMBRE PLATAFORMA','')).strip()
+                            if s: 
+                                dicc_nom2[s] = str(r.get('NOMBRE PLATAFORMA','')).strip()
+                                dicc_tipo2[s] = str(r.get('TIPO','NORMAL')).strip().upper()
 
                 dfs2 = [procesar_csv(a, detectar_plataforma_csv(a)[0], detectar_plataforma_csv(a)[1]) for a in csvs]
-                df_matriz = unificar_y_distribuir(dfs2, emps2, dicc_nom2)
+                df_matriz, _ = unificar_y_distribuir(dfs2, emps2, dicc_nom2, dicc_tipo2)
                 
-                # --- MAPEO DE JMX PARA TIKTOK (TU CÓDIGO) ---
+                # --- MAPEO DE JMX PARA TIKTOK ---
                 mapa_pedidos_tiktok = {}
                 df_tk_main = df_matriz[df_matriz['PLATAFORMA'] == 'TIKTOK']
                 for _, r in df_tk_main.iterrows():
@@ -327,10 +360,21 @@ with tab2:
                     if ped and ped != 'nan': mapa_pedidos_tiktok[ped] = ped
                     if trk and trk != 'nan': mapa_pedidos_tiktok[trk] = ped
 
+                if csv_jmx:
+                    plat_jmx, cod_jmx = detectar_plataforma_csv(csv_jmx)
+                    if plat_jmx == 'TIKTOK':
+                        df_jmx = procesar_csv(csv_jmx, 'TIKTOK', cod_jmx)
+                        for _, r in df_jmx.iterrows():
+                            ped = str(r.get('PEDIDO','')).replace('.0','').strip()
+                            trk = str(r.get('TRACKING_ID','')).replace('.0','').strip()
+                            if ped and trk and ped != 'nan' and trk != 'nan': 
+                                mapa_pedidos_tiktok[ped] = ped
+                                mapa_pedidos_tiktok[trk] = ped
+
                 paginas_por_pedido = {}
                 
                 # =========================================================
-                # TU CÓDIGO DE BÚSQUEDA 1: TIKTOK
+                # CEREBRO 1: TIKTOK (TU CÓDIGO ORIGINAL INTACTO)
                 # =========================================================
                 if pdf_k2: 
                     reader_tk = PyPDF2.PdfReader(pdf_k2)
@@ -362,7 +406,7 @@ with tab2:
                                 paginas_por_pedido[order_id].append(pag)
 
                 # =========================================================
-                # TU CÓDIGO DE BÚSQUEDA 2: TEMU
+                # CEREBRO 2: TEMU (TU CÓDIGO ORIGINAL INTACTO)
                 # =========================================================
                 if pdf_t2:
                     reader_te = PyPDF2.PdfReader(pdf_t2)
@@ -385,7 +429,7 @@ with tab2:
                             pass 
 
                 # =========================================================
-                # TU CÓDIGO DE BÚSQUEDA 3: SHEIN
+                # CEREBRO 3: SHEIN (TU CÓDIGO ORIGINAL INTACTO)
                 # =========================================================
                 if pdf_s2: 
                     reader_sh = PyPDF2.PdfReader(pdf_s2)
