@@ -99,15 +99,13 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limit
         lambda r: 'AVALANCHA' if (r['TIPOS_PRODUCTO'] == 1 and r['SKU'] in top_5_skus) else 'CARRITO', axis=1
     )
     
-    # REPARTICIÓN CON LÍMITE DE 15 PIEZAS ORDENADO POR VOLUMEN DE MAYOR A MENOR
+    # REPARTICIÓN CON LÍMITE DE 15 PIEZAS ORDENADO POR VOLUMEN
     asignaciones = {}
     emp_idx = 0
     num_emp = len(empleados)
     
     for cat in ['AVALANCHA', 'CARRITO']:
         df_cat = df_total[df_total['CATEGORIA'] == cat].copy()
-        
-        # CORRECCIÓN 1: Ordenar los SKUs por el volumen total de piezas (de mayor a menor)
         sku_volumen = df_cat.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False)
         skus_ordenados = sku_volumen.index.tolist()
         
@@ -127,7 +125,7 @@ st.title("🤖 Vmingo ERP: Coordinador Logístico Multiplataforma")
 tab1, tab2 = st.tabs(["🛒 FASE 1: Picking (Surtido de Almacén)", "📦 FASE 2: Empaque (Cruce PDF y Tickets)"])
 
 # =====================================================================
-# FASE 1: LISTAS DE RECOLECCIÓN (TICKETS TÉRMICOS)
+# FASE 1: LISTAS DE RECOLECCIÓN (TICKETS TÉRMICOS SEPARADOS)
 # =====================================================================
 with tab1:
     st.markdown("### 1. Planificación de Trabajo Matutino")
@@ -145,10 +143,15 @@ with tab1:
         emps = [e.strip().upper() for e in e_in.split(',') if e.strip()]
         if not archs or not emps: st.error("Faltan datos. Sube CSVs y escribe los nombres.")
         else:
-            with st.spinner("Licuando datos, ordenando por volumen y armando tickets..."):
+            with st.spinner("Licuando datos, asignando y armando tickets exclusivos..."):
                 dicc_nom, dicc_tipo = {}, {}
                 if f_base:
-                    df_b = pd.read_excel(f_base)
+                    try:
+                        # BLINDAJE: Busca específicamente la pestaña 'BASE'
+                        df_b = pd.read_excel(f_base, sheet_name='BASE')
+                    except Exception:
+                        df_b = pd.read_excel(f_base)
+                        
                     df_b.columns = df_b.columns.str.strip().str.upper()
                     for _, r in df_b.iterrows():
                         s = str(r.get('SKU','')).strip()
@@ -159,7 +162,6 @@ with tab1:
                 dfs = [procesar_csv(a, detectar_plataforma_csv(a)[0], detectar_plataforma_csv(a)[1]) for a in archs]
                 df_final, top5 = unificar_y_distribuir(dfs, emps, dicc_nom, dicc_tipo, limite_sku=15)
                 
-                # --- MÉTRICAS DE PANTALLA ---
                 total_pedidos = df_final['PEDIDO'].nunique()
                 total_piezas = int(df_final['CANTIDAD'].sum())
                 
@@ -171,17 +173,27 @@ with tab1:
                 colores_division = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD']
                 
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    # 1. Top 5 Avalancha (Lista General)
+                    # 1. Top 5 Avalancha (Para ir a los pasillos)
                     df_resumen = df_final[df_final['CATEGORIA'] == 'AVALANCHA'].groupby(['SKU','Nombre Correcto','TIPO'])['CANTIDAD'].sum().reset_index()
                     df_resumen.sort_values(by='CANTIDAD', ascending=False).to_excel(writer, sheet_name='🔥 TOP 5 AVALANCHA', index=False)
                     ws_ava = writer.sheets['🔥 TOP 5 AVALANCHA']
                     ws_ava.set_column('A:A', 15); ws_ava.set_column('B:B', 60); ws_ava.set_column('C:C', 15); ws_ava.set_column('D:D', 15)
+
+                    # 2. Hoja Independiente: Asignación de la Avalancha
+                    df_asig_ava = df_final[df_final['CATEGORIA'] == 'AVALANCHA'].groupby(['ASIGNADO_A', 'SKU', 'Nombre Correcto'])['CANTIDAD'].sum().reset_index()
+                    if not df_asig_ava.empty:
+                        df_asig_ava = df_asig_ava.sort_values(by=['ASIGNADO_A', 'CANTIDAD'], ascending=[True, False])
+                        df_asig_ava.rename(columns={'ASIGNADO_A': 'EMPLEADO'}, inplace=True)
+                        df_asig_ava.to_excel(writer, sheet_name='⚡ ASIGNACION AVALANCHA', index=False)
+                        ws_asig = writer.sheets['⚡ ASIGNACION AVALANCHA']
+                        ws_asig.set_column('A:A', 20); ws_asig.set_column('B:B', 20); ws_asig.set_column('C:C', 60); ws_asig.set_column('D:D', 15)
                     
-                    # 2. Tickets Térmicos de Surtido por Empleado (Todo lo que les toca surtir)
+                    # 3. Tickets Térmicos de Surtido por Empleado (SOLO CARRITOS)
                     for i, e in enumerate(emps):
-                        df_e = df_final[df_final['ASIGNADO_A'] == e].groupby(['SKU','Nombre Correcto','TIPO','CATEGORIA'])['CANTIDAD'].sum().reset_index()
+                        # Filtramos estrictamente a CARRITO para no mezclar
+                        df_e = df_final[(df_final['ASIGNADO_A'] == e) & (df_final['CATEGORIA'] == 'CARRITO')].groupby(['SKU','Nombre Correcto','TIPO'])['CANTIDAD'].sum().reset_index()
                         if not df_e.empty:
-                            df_e = df_e.sort_values(by=['CATEGORIA','TIPO','CANTIDAD'], ascending=[True, False, False]).reset_index(drop=True)
+                            df_e = df_e.sort_values(by=['TIPO','CANTIDAD'], ascending=[False, False]).reset_index(drop=True)
                             color_actual = colores_division[i % len(colores_division)]
                             
                             hoja_ticket = writer.book.add_worksheet(f"🛒 {e}_Ticket")
@@ -193,7 +205,7 @@ with tab1:
                             fmt_wrap = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'text_wrap': True, 'bg_color': color_actual, 'border': 1})
                             
                             hoja_ticket.write('A1', f'DIVISION {i+1}', fmt_header)
-                            hoja_ticket.write('D1', 'PICKING', fmt_header) 
+                            hoja_ticket.write('D1', 'CARRITO', fmt_header) 
                             hoja_ticket.merge_range('A2:D2', f"SURTIR: {e.upper()}", fmt_titulo_ticket)
                             
                             encabezados = ['NO', 'SKU', 'NOMBRE COMUN', 'CANTI\nDAD']
@@ -208,20 +220,20 @@ with tab1:
                                 total_piezas_emp += cant
                                 hoja_ticket.write(fila, 0, idx + 1, fmt_td_centro) 
                                 hoja_ticket.write(fila, 1, item['SKU'], fmt_td_centro)            
-                                hoja_ticket.write(fila, 2, f"{item['Nombre Correcto']} [{item['CATEGORIA']}]", fmt_td_izq)  
+                                hoja_ticket.write(fila, 2, item['Nombre Correcto'], fmt_td_izq)  
                                 hoja_ticket.write(fila, 3, cant, fmt_td_centro)     
                                 fila += 1
                                 
                             hoja_ticket.write(fila, 0, len(df_e) + 1, fmt_td_centro)
-                            hoja_ticket.merge_range(fila, 1, fila, 2, 'Total a surtir', fmt_total)
+                            hoja_ticket.merge_range(fila, 1, fila, 2, 'Total de Carrito', fmt_total)
                             hoja_ticket.write(fila, 3, total_piezas_emp, fmt_total)
                             
                             hoja_ticket.set_column('A:A', 4); hoja_ticket.set_column('B:B', 16); hoja_ticket.set_column('C:C', 38); hoja_ticket.set_column('D:D', 6)
                             hoja_ticket.set_row(3, 30); hoja_ticket.set_row(1, 25) 
                             hoja_ticket.fit_to_pages(1, 0); hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1)
                 
-                st.success("✅ ¡Listas creadas en Formato TICKET Térmico! Listas para imprimir.")
-                st.download_button("📥 Descargar Tickets Fase 1", output.getvalue(), f"Picking_Termico_{datetime.now().strftime('%d-%m-%Y')}.xlsx", "application/vnd.ms-excel")
+                st.success("✅ ¡Nombres detectados y Tickets Limpios (Sin Avalancha) creados con éxito!")
+                st.download_button("📥 Descargar Picking Fase 1", output.getvalue(), f"Picking_Termico_{datetime.now().strftime('%d-%m-%Y')}.xlsx", "application/vnd.ms-excel")
 
 # =====================================================================
 # FASE 2: EMPAQUE Y MULTI-PDF (SOLO CARITOS EN TICKET, AUDITORIA CON JMX)
@@ -253,7 +265,11 @@ with tab2:
             with st.spinner("Cruzando plataformas y armando los PDFs individuales..."):
                 dicc_nom2, dicc_tipo2 = {}, {}
                 if f_base2:
-                    df_b2 = pd.read_excel(f_base2)
+                    try:
+                        df_b2 = pd.read_excel(f_base2, sheet_name='BASE')
+                    except Exception:
+                        df_b2 = pd.read_excel(f_base2)
+                        
                     df_b2.columns = df_b2.columns.str.strip().str.upper()
                     for _, r in df_b2.iterrows():
                         s = str(r.get('SKU','')).strip()
@@ -267,7 +283,6 @@ with tab2:
                 
                 paginas_por_pedido = {}
                 
-                # --- MATCH TIKTOK (JMX) ---
                 if pdf_k2 and csv_k2: 
                     reader = PyPDF2.PdfReader(pdf_k2)
                     jmx_actual = None
@@ -280,7 +295,6 @@ with tab2:
                         j = str(r['TRACKING_ID']).replace('.0','').strip()
                         if j in temp_pages: paginas_por_pedido[r['PEDIDO']] = temp_pages[j]
 
-                # --- MATCH TEMU ---
                 if pdf_t2: 
                     reader = PyPDF2.PdfReader(pdf_t2)
                     po_actual = None
@@ -293,7 +307,6 @@ with tab2:
                                 if i > 0: paginas_por_pedido[po_actual].append(reader.pages[i-1])
                         if po_actual: paginas_por_pedido[po_actual].append(p)
 
-                # --- MATCH SHEIN ---
                 if pdf_s2: 
                     reader = PyPDF2.PdfReader(pdf_s2)
                     chunks = []
@@ -312,7 +325,6 @@ with tab2:
                 total_encontrados = len(paginas_por_pedido)
                 st.metric("🎯 Guías Físicas Encontradas y Cortadas", total_encontrados)
 
-                # --- GENERACIÓN DEL ZIP FINAL ---
                 zip_buf = io.BytesIO()
                 colores_division = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD']
                 
@@ -325,10 +337,10 @@ with tab2:
                             color_actual = colores_division[i % len(colores_division)]
                             
                             if not df_e.empty:
-                                # 1. Hoja Auditoría (Para tu control en PC, incluye TRACKING_ID/JMX)
+                                # 1. Hoja Auditoría (Para tu control en PC)
                                 df_e[['PEDIDO','TRACKING_ID','PLATAFORMA','SKU','Nombre Correcto','CANTIDAD', 'CATEGORIA']].to_excel(writer, sheet_name=e, index=False)
                                 
-                                # 2. Hoja Ticket Térmico de Empaque (Exclusivo CARRITOS, sin Avalancha)
+                                # 2. Hoja Ticket Térmico de Empaque (Exclusivo CARRITOS)
                                 df_ticket = df_e[df_e['CATEGORIA'] == 'CARRITO'].copy()
                                 if not df_ticket.empty:
                                     picking_list = df_ticket.groupby(['SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
@@ -371,7 +383,7 @@ with tab2:
                                     hoja_ticket.set_row(3, 30); hoja_ticket.set_row(1, 25) 
                                     hoja_ticket.fit_to_pages(1, 0); hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1)
                                 
-                                # CORRECCIÓN 2: PDFs SEPARADOS (AVALANCHA vs CARRITOS)
+                                # PDFs SEPARADOS (AVALANCHA vs CARRITOS)
                                 df_ava_pdf = df_e[df_e['CATEGORIA'] == 'AVALANCHA'].copy()
                                 if not df_ticket.empty:
                                     p_writer_car = PyPDF2.PdfWriter()
