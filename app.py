@@ -9,7 +9,7 @@ from datetime import datetime
 st.set_page_config(page_title="Vmingo ERP - Robot Almacén", page_icon="🤖", layout="wide")
 
 # =====================================================================
-# FUNCIONES MATEMÁTICAS Y DE EXTRACCIÓN
+# FUNCIONES MATEMÁTICAS Y DE EXTRACCIÓN (TU CÓDIGO ORIGINAL INTACTO)
 # =====================================================================
 def limpiar_nombre(texto):
     idx = texto.lower().find('detalle')
@@ -26,7 +26,7 @@ def detectar_plataforma_csv(archivo_csv_buffer):
             for linea in lineas[:5]:
                 lin_low = linea.lower()
                 if 'id del pedido' in lin_low and 'sku de contribución' in lin_low: return 'TEMU', cod
-                if ('order id' in lin_low or 'id de pedido' in lin_low) and ('seller sku' in lin_low or 'sku del vendedor' in lin_low or 'tracking id' in lin_low or 'id de seguimiento' in lin_low): return 'TIKTOK', cod
+                if 'order id' in lin_low and 'seller sku' in lin_low: return 'TIKTOK', cod
                 if 'número de pedido' in lin_low and 'sku del vendedor' in lin_low: return 'SHEIN', cod
         except: pass
     return 'DESCONOCIDA', None
@@ -38,12 +38,12 @@ def procesar_csv(archivo, plataforma, codificacion):
     for i, linea in enumerate(texto_csv.splitlines()):
         lin_low = linea.lower()
         if (plataforma == 'TEMU' and 'id del pedido' in lin_low) or \
-           (plataforma == 'TIKTOK' and ('order id' in lin_low or 'id de pedido' in lin_low)) or \
+           (plataforma == 'TIKTOK' and 'order id' in lin_low) or \
            (plataforma == 'SHEIN' and 'número de pedido' in lin_low):
             skip_lineas = i; break
     archivo.seek(0) 
     
-    # BLINDAJE ANTI NOTACIÓN CIENTÍFICA: Tratamos todo como texto
+    # dtype=str para que Excel no rompa los números largos
     df = pd.read_csv(archivo, skiprows=skip_lineas, encoding=codificacion, dtype=str)
     cols_map = {c.lower().strip(): c for c in df.columns}
     
@@ -53,36 +53,23 @@ def procesar_csv(archivo, plataforma, codificacion):
         col_pedido = cols_map.get('id del pedido')
         col_sku = cols_map.get('sku de contribución', cols_map.get('sku de contribucion'))
         col_nom = cols_map.get('nombre del producto')
-        col_var = cols_map.get('variación', cols_map.get('variacion'))
         col_cant = cols_map.get('cantidad a enviar')
-        col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento'))
         
         df_f['PEDIDO'] = df[col_pedido] if col_pedido else "TEMU_SD"
         df_f['SKU'] = df[col_sku] if col_sku else ""
         df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
-        df_f['VARIACION'] = df[col_var] if col_var else ""
         df_f['CANTIDAD'] = df[col_cant] if col_cant else 1
-        df_f['TRACKING_ID'] = df[col_track] if col_track else ""
         
     elif plataforma == 'TIKTOK':
-        col_order_base = cols_map.get('order id', cols_map.get('id de pedido'))
-        col_pkg = cols_map.get('package id', cols_map.get('id del paquete'))
-        col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento', cols_map.get('tracking id', cols_map.get('id de seguimiento'))))
-        
+        col_order = cols_map.get('order id', cols_map.get('id de pedido'))
         col_sku = cols_map.get('seller sku', cols_map.get('sku del vendedor'))
         col_nom = cols_map.get('product name', cols_map.get('nombre del producto'))
-        col_var = cols_map.get('variation', cols_map.get('variacion'))
         col_cant = cols_map.get('quantity', cols_map.get('cantidad'))
+        col_track = cols_map.get('tracking id', cols_map.get('id de seguimiento'))
         
-        # LA MAGIA ANTI-FUSIÓN: Si hay Tracking ID o Package ID, lo usamos como PEDIDO principal.
-        if col_track and df[col_track].notna().any(): col_main = col_track
-        elif col_pkg and df[col_pkg].notna().any(): col_main = col_pkg
-        else: col_main = col_order_base
-        
-        df_f['PEDIDO'] = df[col_main] if col_main else "TK_SD"
+        df_f['PEDIDO'] = df[col_order] if col_order else "TK_SD"
         df_f['SKU'] = df[col_sku] if col_sku else ""
         df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
-        df_f['VARIACION'] = df[col_var] if col_var else ""
         df_f['CANTIDAD'] = df[col_cant] if col_cant else 1
         df_f['TRACKING_ID'] = df[col_track] if col_track else ""
         
@@ -90,21 +77,22 @@ def procesar_csv(archivo, plataforma, codificacion):
         col_pedido = cols_map.get('número de pedido', cols_map.get('numero de pedido'))
         col_sku = cols_map.get('sku del vendedor')
         col_nom = cols_map.get('nombre del producto')
-        col_var = cols_map.get('especificación', cols_map.get('especificacion'))
-        col_track = cols_map.get('número de carta de porte de ida y vuelta', cols_map.get('numero de carta de porte de ida y vuelta'))
         
         df_f['PEDIDO'] = df[col_pedido] if col_pedido else "SH_SD"
         df_f['SKU'] = df[col_sku] if col_sku else ""
         df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
-        df_f['VARIACION'] = df[col_var] if col_var else ""
         df_f['CANTIDAD'] = 1
-        df_f['TRACKING_ID'] = df[col_track] if col_track else ""
         
     df_f['PLATAFORMA'] = plataforma
     df_f['ORDEN_ORIGINAL'] = range(len(df_f)) 
+    
+    if 'TRACKING_ID' not in df_f.columns: df_f['TRACKING_ID'] = ""
     return df_f
 
-def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limite_cajas=15):
+# =====================================================================
+# EL CEREBRO DE REPARTICIÓN (A TU MANERA)
+# =====================================================================
+def unificar_y_distribuir(dataframes, empleados, dicc_nombres):
     df_total = pd.concat(dataframes, ignore_index=True)
     df_total = df_total.dropna(subset=['PEDIDO'])
     df_total['PEDIDO'] = df_total['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
@@ -114,8 +102,8 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limit
     df_total = df_total[df_total['CANTIDAD'] > 0] 
     
     df_total['Nombre Correcto'] = df_total['SKU'].apply(lambda x: limpiar_nombre(dicc_nombres.get(x, "SIN NOMBRE EN BASE")))
-    df_total['TIPO'] = df_total['SKU'].apply(lambda x: dicc_tipos.get(x, "NORMAL"))
     
+    # 1. CONTEO GLOBAL DE PRODUCTOS PARA IDENTIFICAR AVALANCHA
     conteo_pedidos = df_total.groupby('PEDIDO')['SKU'].nunique().reset_index()
     conteo_pedidos.columns = ['PEDIDO', 'TIPOS_PRODUCTO']
     df_total = df_total.merge(conteo_pedidos, on='PEDIDO')
@@ -131,52 +119,40 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limit
     emp_idx = 0
     num_emp = len(empleados)
     
+    # 2. REPARTIR POR PARTES (TIENDA POR TIENDA)
     for plat in ['TIKTOK', 'SHEIN', 'TEMU']:
-        df_plat = df_total[df_total['PLATAFORMA'] == plat]
+        df_plat = df_total[df_total['PLATAFORMA'] == plat].copy()
         if df_plat.empty: continue
         
-        df_single_plat = df_plat[df_plat['TIPOS_PRODUCTO'] == 1]
+        # A) Primero la Avalancha de esta tienda
+        df_ava = df_plat[df_plat['CATEGORIA'] == 'AVALANCHA']
+        pedidos_ava = df_ava['PEDIDO'].unique().tolist()
         
-        pedidos_ava = df_single_plat[df_single_plat['SKU'].isin(top_5_skus)]['PEDIDO'].unique().tolist()
         if plat == 'SHEIN': pedidos_ava = df_plat[df_plat['PEDIDO'].isin(pedidos_ava)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
         else: pedidos_ava.sort()
+        
         for p in pedidos_ava:
             asignaciones[p] = empleados[emp_idx % num_emp]
             emp_idx += 1
 
-        df_mini_caja = df_single_plat[(~df_single_plat['SKU'].isin(top_5_skus)) & (df_single_plat['TIPO'] == 'CAJA')]
-        sku_vol_caja = df_mini_caja.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False).index.tolist()
-        for sku in sku_vol_caja:
-            peds_sku = df_mini_caja[df_mini_caja['SKU'] == sku]['PEDIDO'].unique().tolist()
-            if plat == 'SHEIN': peds_sku = df_plat[df_plat['PEDIDO'].isin(peds_sku)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
-            else: peds_sku.sort()
-            for i in range(0, len(peds_sku), limite_cajas):
-                chunk = peds_sku[i : i + limite_cajas]
-                emp_asignado = empleados[emp_idx % num_emp]
-                for p in chunk: asignaciones[p] = emp_asignado
-                emp_idx += 1
-
-        df_mini_norm = df_single_plat[(~df_single_plat['SKU'].isin(top_5_skus)) & (df_single_plat['TIPO'] != 'CAJA')]
-        sku_vol_norm = df_mini_norm.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False).index.tolist()
-        for sku in sku_vol_norm:
-            peds_sku = df_mini_norm[df_mini_norm['SKU'] == sku]['PEDIDO'].unique().tolist()
-            if plat == 'SHEIN': peds_sku = df_plat[df_plat['PEDIDO'].isin(peds_sku)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
-            else: peds_sku.sort()
-            emp_asignado = empleados[emp_idx % num_emp] 
-            for p in peds_sku: asignaciones[p] = emp_asignado
-            emp_idx += 1
-
-        df_mixtos = df_plat[df_plat['TIPOS_PRODUCTO'] > 1]
-        pedidos_mixtos = df_mixtos['PEDIDO'].unique().tolist()
-        if plat == 'SHEIN': pedidos_mixtos = df_plat[df_plat['PEDIDO'].isin(pedidos_mixtos)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
-        else: pedidos_mixtos.sort()
-        for p in pedidos_mixtos:
+        # B) Regresa por los Carritos, los ORDENA POR CANTIDADES y los reparte
+        df_car = df_plat[df_plat['CATEGORIA'] == 'CARRITO']
+        pedidos_resto = df_car['PEDIDO'].unique().tolist()
+        
+        cantidades_por_pedido = df_car.groupby('PEDIDO')['CANTIDAD'].sum().to_dict()
+        
+        if plat == 'SHEIN': 
+            pedidos_resto = df_plat[df_plat['PEDIDO'].isin(pedidos_resto)].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique().tolist()
+        else:
+            # Ordena del pedido que lleva más productos al que lleva menos
+            pedidos_resto.sort(key=lambda x: cantidades_por_pedido.get(x, 0), reverse=True)
+            
+        for p in pedidos_resto:
             asignaciones[p] = empleados[emp_idx % num_emp]
             emp_idx += 1
                 
     df_total['ASIGNADO_A'] = df_total['PEDIDO'].map(asignaciones)
-
-    return df_total, top_5_skus
+    return df_total
 
 st.title("🤖 Vmingo ERP: Coordinador Logístico Multiplataforma")
 
@@ -193,7 +169,7 @@ with tab1:
     with col_k: f_k = st.file_uploader("CSV TIKTOK", type=["csv"], key="k1")
     
     col_b, col_e = st.columns([1, 2])
-    with col_b: f_base = st.file_uploader("BASE (Con columna TIPO)", type=["xlsx", "xlsm"], key="b1")
+    with col_b: f_base = st.file_uploader("BASE (Opcional)", type=["xlsx", "xlsm"], key="b1")
     with col_e: e_in = st.text_input("Equipo en Turno (Separado por comas):", "ANTONIO, IVAN, CRISTIAN, ALEXIS, OSCAR")
 
     if st.button("📊 Generar Mega-Picking Equitativo", type="primary"):
@@ -203,38 +179,38 @@ with tab1:
         
         if not archs or not emps: st.error("Faltan datos. Sube CSVs y escribe los nombres.")
         else:
-            with st.spinner("Desvinculando paquetes de TikTok y agrupando almacén..."):
-                dicc_nom, dicc_tipo = {}, {}
+            with st.spinner("Leyendo por partes y ordenando por cantidades..."):
+                dicc_nom = {}
                 if f_base:
                     try:
                         df_b = pd.read_excel(f_base, sheet_name='BASE', dtype=str)
                     except Exception:
                         df_b = pd.read_excel(f_base, dtype=str)
                     df_b.columns = df_b.columns.str.strip().str.upper()
-                    for _, r in df_b.iterrows():
-                        s = str(r.get('SKU','')).strip()
-                        if s and s != 'nan':
-                            dicc_nom[s] = str(r.get('NOMBRE PLATAFORMA','')).strip()
-                            dicc_tipo[s] = str(r.get('TIPO','NORMAL')).strip().upper()
+                    if 'SKU' in df_b.columns and 'NOMBRE PLATAFORMA' in df_b.columns:
+                        for _, r in df_b.iterrows():
+                            s = str(r.get('SKU','')).strip()
+                            if s and s != 'nan':
+                                dicc_nom[s] = str(r.get('NOMBRE PLATAFORMA','')).strip()
 
                 dfs = [procesar_csv(a, detectar_plataforma_csv(a)[0], detectar_plataforma_csv(a)[1]) for a in archs]
-                df_final, top5 = unificar_y_distribuir(dfs, emps, dicc_nom, dicc_tipo, limite_cajas=15)
+                df_final = unificar_y_distribuir(dfs, emps, dicc_nom)
                 
                 total_pedidos = df_final['PEDIDO'].nunique()
                 total_piezas = int(df_final['CANTIDAD'].sum())
                 
                 m1, m2 = st.columns(2)
-                m1.metric("📦 Total de Pedidos/Guías Reales del Día", total_pedidos)
+                m1.metric("📦 Total de Pedidos del Día", total_pedidos)
                 m2.metric("🧩 Total de Piezas Físicas (Volumen)", total_piezas)
                 
                 output = io.BytesIO()
                 colores_division = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD']
                 
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_resumen = df_final[df_final['CATEGORIA'] == 'AVALANCHA'].groupby(['SKU','Nombre Correcto','TIPO'])['CANTIDAD'].sum().reset_index()
+                    df_resumen = df_final[df_final['CATEGORIA'] == 'AVALANCHA'].groupby(['SKU','Nombre Correcto'])['CANTIDAD'].sum().reset_index()
                     df_resumen.sort_values(by='CANTIDAD', ascending=False).to_excel(writer, sheet_name='🔥 TOP 5 AVALANCHA', index=False)
                     ws_ava = writer.sheets['🔥 TOP 5 AVALANCHA']
-                    ws_ava.set_column('A:A', 15); ws_ava.set_column('B:B', 60); ws_ava.set_column('C:C', 15); ws_ava.set_column('D:D', 15)
+                    ws_ava.set_column('A:A', 15); ws_ava.set_column('B:B', 60); ws_ava.set_column('C:C', 15)
 
                     df_asig_ava = df_final[df_final['CATEGORIA'] == 'AVALANCHA'].groupby(['ASIGNADO_A', 'SKU', 'Nombre Correcto'])['CANTIDAD'].sum().reset_index()
                     if not df_asig_ava.empty:
@@ -246,7 +222,7 @@ with tab1:
                     
                     for i, e in enumerate(emps):
                         df_e = df_final[(df_final['ASIGNADO_A'] == e) & (df_final['CATEGORIA'] == 'CARRITO')].groupby(
-                            ['SKU','Nombre Correcto','TIPO']
+                            ['SKU','Nombre Correcto']
                         ).agg(
                             CANTIDAD=('CANTIDAD', 'sum'),
                             TIENE_TEMU=('PLATAFORMA', lambda x: 'TEMU' in x.values)
@@ -278,9 +254,7 @@ with tab1:
                             for idx, item in df_e.iterrows():
                                 cant = int(item['CANTIDAD'])
                                 total_piezas_emp += cant
-                                
                                 nombre_display = f"🟢 [TEMU - AVISAR] {item['Nombre Correcto']}" if item['TIENE_TEMU'] else item['Nombre Correcto']
-                                
                                 hoja_ticket.write(fila, 0, idx + 1, fmt_td_centro) 
                                 hoja_ticket.write(fila, 1, item['SKU'], fmt_td_centro)            
                                 hoja_ticket.write(fila, 2, nombre_display, fmt_td_izq)  
@@ -295,32 +269,31 @@ with tab1:
                             hoja_ticket.set_row(3, 30); hoja_ticket.set_row(1, 25) 
                             hoja_ticket.fit_to_pages(1, 0); hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1)
                 
-                st.success("✅ ¡Tickets de Picking listos y paquetes correctamente separados!")
+                st.success("✅ ¡Tickets de Picking listos y ordenados!")
                 st.download_button("📥 Descargar Picking Fase 1", output.getvalue(), f"Picking_Termico_{datetime.now().strftime('%d-%m-%Y')}.xlsx", "application/vnd.ms-excel")
 
 # =====================================================================
-# FASE 2: EMPAQUE Y MULTI-PDF 
+# FASE 2: EMPAQUE Y MULTI-PDF (RESTAURANDO TU CÓDIGO ORIGINAL DE PDFs)
 # =====================================================================
 with tab2:
     st.markdown("### 2. Generador de Guías y Tickets de Empaque")
-    st.info("💡 Sube los MISMOS CSVs de la mañana para cuadrar matemáticas. Aparte, sube el JMX y los PDFs.")
+    st.info("💡 Sube los MISMOS CSVs y los PDFs.")
     
     col_t2, col_s2, col_k2 = st.columns(3)
     with col_t2:
         st.write("🔴 **TEMU**")
-        csv_t2 = st.file_uploader("CSV Temu (Mismo de F1)", type=["csv"], key="ct2")
+        csv_t2 = st.file_uploader("CSV Temu (F2)", type=["csv"], key="ct2")
         pdf_t2 = st.file_uploader("PDF Temu", type=["pdf"], key="pt2")
     with col_s2:
         st.write("🟢 **SHEIN**")
-        csv_s2 = st.file_uploader("CSV Shein (Mismo de F1)", type=["csv"], key="cs2")
+        csv_s2 = st.file_uploader("CSV Shein (F2)", type=["csv"], key="cs2")
         pdf_s2 = st.file_uploader("PDF Shein", type=["pdf"], key="ps2")
     with col_k2:
         st.write("🔵 **TIKTOK**")
-        csv_k2 = st.file_uploader("CSV TikTok (Mismo de F1)", type=["csv"], key="ck2")
-        csv_jmx = st.file_uploader("CSV TikTok JMX (Opcional)", type=["csv"], key="cjmx")
+        csv_k2 = st.file_uploader("CSV TikTok (F2)", type=["csv"], key="ck2")
         pdf_k2 = st.file_uploader("PDF TikTok", type=["pdf"], key="pk2")
     
-    f_base2 = st.file_uploader("BASE", type=["xlsx", "xlsm"], key="b2")
+    f_base2 = st.file_uploader("BASE (F2)", type=["xlsx", "xlsm"], key="b2")
 
     if st.button("✂️ Cortar y Generar Archivos de Empaque", type="primary"):
         csvs = [f for f in [csv_t2, csv_s2, csv_k2] if f is not None]
@@ -329,24 +302,23 @@ with tab2:
         
         if not csvs: st.error("Sube los CSVs base para armar la matemática.")
         else:
-            with st.spinner("Cortando guías y validando paquetes de TikTok..."):
-                dicc_nom2, dicc_tipo2 = {}, {}
+            with st.spinner("Cortando guías usando el buscador original..."):
+                dicc_nom2 = {}
                 if f_base2:
                     try:
                         df_b2 = pd.read_excel(f_base2, sheet_name='BASE', dtype=str)
                     except Exception:
                         df_b2 = pd.read_excel(f_base2, dtype=str)
                     df_b2.columns = df_b2.columns.str.strip().str.upper()
-                    for _, r in df_b2.iterrows():
-                        s = str(r.get('SKU','')).strip()
-                        if s: 
-                            dicc_nom2[s] = str(r.get('NOMBRE PLATAFORMA','')).strip()
-                            dicc_tipo2[s] = str(r.get('TIPO','NORMAL')).strip().upper()
+                    if 'SKU' in df_b2.columns and 'NOMBRE PLATAFORMA' in df_b2.columns:
+                        for _, r in df_b2.iterrows():
+                            s = str(r.get('SKU','')).strip()
+                            if s: dicc_nom2[s] = str(r.get('NOMBRE PLATAFORMA','')).strip()
 
                 dfs2 = [procesar_csv(a, detectar_plataforma_csv(a)[0], detectar_plataforma_csv(a)[1]) for a in csvs]
-                df_matriz, _ = unificar_y_distribuir(dfs2, emps2, dicc_nom2, dicc_tipo2, limite_cajas=15)
+                df_matriz = unificar_y_distribuir(dfs2, emps2, dicc_nom2)
                 
-                # --- MAPEO DE TRACKINGS PARA TODAS LAS PLATAFORMAS ---
+                # --- MAPEO DE JMX PARA TIKTOK (TU CÓDIGO) ---
                 mapa_pedidos_tiktok = {}
                 df_tk_main = df_matriz[df_matriz['PLATAFORMA'] == 'TIKTOK']
                 for _, r in df_tk_main.iterrows():
@@ -354,159 +326,92 @@ with tab2:
                     trk = str(r['TRACKING_ID']).replace('.0','').strip()
                     if ped and ped != 'nan': mapa_pedidos_tiktok[ped] = ped
                     if trk and trk != 'nan': mapa_pedidos_tiktok[trk] = ped
-                    
-                if csv_jmx:
-                    plat_jmx, cod_jmx = detectar_plataforma_csv(csv_jmx)
-                    if plat_jmx == 'TIKTOK':
-                        df_jmx = procesar_csv(csv_jmx, 'TIKTOK', cod_jmx)
-                        for _, r in df_jmx.iterrows():
-                            ped = str(r.get('PEDIDO','')).replace('.0','').strip()
-                            trk = str(r.get('TRACKING_ID','')).replace('.0','').strip()
-                            if ped and trk and ped != 'nan' and trk != 'nan': 
-                                mapa_pedidos_tiktok[ped] = ped
-                                mapa_pedidos_tiktok[trk] = ped
-                                
-                df_matriz['TRACKING_ID'] = df_matriz.apply(
-                    lambda r: mapa_pedidos_tiktok.get(r['PEDIDO'], r.get('TRACKING_ID', '')) if r['PLATAFORMA'] == 'TIKTOK' else r.get('TRACKING_ID', ''), 
-                    axis=1
-                )
 
                 paginas_por_pedido = {}
                 
                 # =========================================================
-                # CEREBRO 1: TIKTOK
+                # TU CÓDIGO DE BÚSQUEDA 1: TIKTOK
                 # =========================================================
                 if pdf_k2: 
                     reader_tk = PyPDF2.PdfReader(pdf_k2)
                     temp_pages = {}
-                    jmx_actual = None
+                    po_actual_tk = None
+                    patron_pdf_tk = r'(JMX\d+)'
                     
-                    tracking_ids_tiktok = [str(x).replace('.0','').strip().upper() for x in df_matriz[df_matriz['PLATAFORMA'] == 'TIKTOK']['TRACKING_ID'] if x and str(x) != 'NAN']
-                    
-                    for p in reader_tk.pages:
-                        txt_puro = p.extract_text() or ""
-                        txt_limpio = re.sub(r'\s+', '', txt_puro).upper() 
-                        
-                        found_trk = None
-                        for trk in tracking_ids_tiktok:
-                            if trk and trk in txt_limpio:
-                                found_trk = trk
-                                break
-                                
-                        if not found_trk:
-                            matches = re.findall(r'(JMX\d+|GSH\d+|99M\d+|BIGT\d*|JT\d+|MX\d+)', txt_limpio)
-                            if matches: found_trk = str(matches[0]).strip()
-                            
-                        if found_trk:
-                            jmx_actual = found_trk
-                            if jmx_actual not in temp_pages: temp_pages[jmx_actual] = []
-                            
-                        if jmx_actual:
-                            if p not in temp_pages[jmx_actual]: temp_pages[jmx_actual].append(p)
-                            
+                    for pagina in reader_tk.pages:
+                        texto = pagina.extract_text() or ""
+                        matches = re.findall(patron_pdf_tk, texto)
+                        if matches:
+                            po_encontrado = str(matches[0]).strip()
+                            po_actual_tk = po_encontrado
+                            if po_actual_tk not in temp_pages:
+                                temp_pages[po_actual_tk] = []
+                            if pagina not in temp_pages[po_actual_tk]:
+                                temp_pages[po_actual_tk].append(pagina)
+                        else:
+                            if po_actual_tk:
+                                if pagina not in temp_pages[po_actual_tk]:
+                                    temp_pages[po_actual_tk].append(pagina)
+                                    
                     for jmx_key, pags in temp_pages.items():
-                        pedido_real = mapa_pedidos_tiktok.get(jmx_key, jmx_key)
-                        if pedido_real not in paginas_por_pedido: paginas_por_pedido[pedido_real] = []
+                        order_id = mapa_pedidos_tiktok.get(jmx_key, jmx_key)
+                        if order_id not in paginas_por_pedido:
+                            paginas_por_pedido[order_id] = []
                         for pag in pags:
-                            if pag not in paginas_por_pedido[pedido_real]: paginas_por_pedido[pedido_real].append(pag)
+                            if pag not in paginas_por_pedido[order_id]:
+                                paginas_por_pedido[order_id].append(pag)
 
                 # =========================================================
-                # CEREBRO 2: TEMU
+                # TU CÓDIGO DE BÚSQUEDA 2: TEMU
                 # =========================================================
                 if pdf_t2:
-                    reader_temu = PyPDF2.PdfReader(pdf_t2)
-                    po_actual = None
-                    chunk_temporal = []
-                    
-                    df_temu_main = df_matriz[df_matriz['PLATAFORMA'] == 'TEMU']
-                    pedidos_temu = [str(x).replace('.0','').strip().upper() for x in df_temu_main['PEDIDO'] if x and str(x) != 'NAN']
-                    
-                    mapa_track_to_pedido_temu = {}
-                    for _, r in df_temu_main.iterrows():
-                        ped = str(r['PEDIDO']).replace('.0','').strip().upper()
-                        trk = str(r['TRACKING_ID']).replace('.0','').strip().upper()
-                        if ped and trk and ped != 'NAN' and trk != 'NAN':
-                            mapa_track_to_pedido_temu[trk] = ped
-                    
-                    tracking_temu = list(mapa_track_to_pedido_temu.keys())
-
-                    for pagina in reader_temu.pages:
-                        txt_puro = pagina.extract_text() or ""
-                        txt_limpio = re.sub(r'\s+', '', txt_puro).upper()
-                        chunk_temporal.append(pagina)
-
-                        po_encontrado = None
-                        
-                        # 1. Busca el PEDIDO exacto
-                        for ped in pedidos_temu:
-                            if ped in txt_limpio:
-                                po_encontrado = ped
-                                break
-                                
-                        # 2. Busca el TRACKING exacto (Si la etiqueta viene sola)
-                        if not po_encontrado:
-                            for trk in tracking_temu:
-                                if trk in txt_limpio:
-                                    po_encontrado = mapa_track_to_pedido_temu[trk]
-                                    break
-
-                        # 3. Respaldo Regex PO
-                        if not po_encontrado:
-                            matches_po = re.findall(r'(PO-[\d\-A-Z]+)', txt_limpio)
-                            if matches_po: po_encontrado = str(matches_po[0]).strip()
-                            
-                        # 4. Respaldo Regex JMX/Tracking
-                        if not po_encontrado:
-                            matches_trk = re.findall(r'(JMX\d+|GSH\d+|99M\d+|BIGT\d*|JT\d+|MX\d+)', txt_limpio)
-                            if matches_trk: 
-                                found_trk = str(matches_trk[0]).strip()
-                                po_encontrado = mapa_track_to_pedido_temu.get(found_trk)
-
-                        if po_encontrado:
-                            po_actual = po_encontrado
-                            if po_actual not in paginas_por_pedido:
-                                paginas_por_pedido[po_actual] = []
-                            for p_chunk in chunk_temporal:
-                                if p_chunk not in paginas_por_pedido[po_actual]:
-                                    paginas_por_pedido[po_actual].append(p_chunk)
-                            chunk_temporal = [] 
+                    reader_te = PyPDF2.PdfReader(pdf_t2)
+                    po_actual_te = None
+                    patron_pdf_te = r'(PO-\d{3}-\d+)'
+                    for num_pagina, pagina in enumerate(reader_te.pages):
+                        texto = pagina.extract_text() or ""
+                        matches = re.findall(patron_pdf_te, texto)
+                        if matches:
+                            po_encontrado = str(matches[0]).strip()
+                            po_actual_te = po_encontrado
+                            if po_actual_te not in paginas_por_pedido:
+                                paginas_por_pedido[po_actual_te] = []
+                                if num_pagina > 0:
+                                    if reader_te.pages[num_pagina - 1] not in paginas_por_pedido[po_actual_te]:
+                                        paginas_por_pedido[po_actual_te].append(reader_te.pages[num_pagina - 1])
+                            if pagina not in paginas_por_pedido[po_actual_te]:
+                                paginas_por_pedido[po_actual_te].append(pagina)
+                        else:
+                            pass 
 
                 # =========================================================
-                # CEREBRO 3: SHEIN 
+                # TU CÓDIGO DE BÚSQUEDA 3: SHEIN
                 # =========================================================
                 if pdf_s2: 
-                    reader_shein = PyPDF2.PdfReader(pdf_s2)
-                    chunks_pdf = []
-                    chunk_actual = []
-                    
-                    tracking_ids_shein = [str(x).replace('.0','').strip().upper() for x in df_matriz[df_matriz['PLATAFORMA'] == 'SHEIN']['TRACKING_ID'] if x and str(x) != 'NAN']
-                    
-                    for pagina in reader_shein.pages:
-                        txt_puro = pagina.extract_text() or ""
-                        txt_upper = re.sub(r'\s+', '', txt_puro).upper()
-                        
-                        es_declaracion = re.search(r'(DECLARACI|CUSTOMS|INVOICE)', txt_upper)
-                        
-                        tiene_indicadores = False
-                        if re.search(r'(JMX|GSH|JT|TODOOR|D2D|99M|BIGT|ESTAFETA|FEDEX|DHL|AMPM|PAQUETEXPRESS|REDPACK|RABBIT)', txt_upper):
-                            tiene_indicadores = True
-                        else:
-                            for trk in tracking_ids_shein:
-                                if trk and trk in txt_upper:
-                                    tiene_indicadores = True
-                                    break
-                        
+                    reader_sh = PyPDF2.PdfReader(pdf_s2)
+                    chunks_pdf_sh = []
+                    chunk_actual_sh = []
+                    for pagina in reader_sh.pages:
+                        texto = pagina.extract_text() or ""
+                        texto_upper = texto.upper()
+                        es_declaracion = 'DECLARACIÓN DE CONTENIDO' in texto_upper
+                        tiene_indicadores = re.search(r'(JMX|GSH|J&T|TODOOR|D2D)', texto_upper)
                         if tiene_indicadores and not es_declaracion:
-                            if chunk_actual: chunks_pdf.append(chunk_actual)
-                            chunk_actual = [pagina]
+                            if chunk_actual_sh:
+                                chunks_pdf_sh.append(chunk_actual_sh)
+                            chunk_actual_sh = [pagina]
                         else:
-                            if chunk_actual: chunk_actual.append(pagina)
-                            else: chunk_actual = [pagina]
-                    if chunk_actual: chunks_pdf.append(chunk_actual)
-                    
-                    peds_s = df_matriz[df_matriz['PLATAFORMA'] == 'SHEIN'].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique()
-                    for i, ped in enumerate(peds_s):
-                        if i < len(chunks_pdf): paginas_por_pedido[ped] = chunks_pdf[i]
+                            if chunk_actual_sh:
+                                chunk_actual_sh.append(pagina)
+                            else:
+                                chunk_actual_sh = [pagina]
+                    if chunk_actual_sh:
+                        chunks_pdf_sh.append(chunk_actual_sh)
+                        
+                    pos_finales_shein = list(dict.fromkeys(df_matriz[df_matriz['PLATAFORMA'] == 'SHEIN']['PEDIDO'].tolist()))
+                    for i, pedido_gsh in enumerate(pos_finales_shein):
+                        if i < len(chunks_pdf_sh):
+                            paginas_por_pedido[pedido_gsh] = chunks_pdf_sh[i]
 
                 # --- MÉTRICAS ---
                 total_encontrados = len(paginas_por_pedido)
@@ -519,7 +424,6 @@ with tab2:
                     excel_buf = io.BytesIO()
                     with pd.ExcelWriter(excel_buf, engine='xlsxwriter') as writer:
                         
-                        # --- AUDITOR DE FALTANTES EN PDF ---
                         df_sin_pdf = df_matriz[~df_matriz['PEDIDO'].isin(paginas_por_pedido.keys())].copy()
                         if not df_sin_pdf.empty:
                             df_resumen_sin = df_sin_pdf[['PEDIDO', 'PLATAFORMA', 'TRACKING_ID', 'SKU', 'Nombre Correcto']].drop_duplicates(subset=['PEDIDO'])
@@ -536,7 +440,6 @@ with tab2:
                         
                         for i, e in enumerate(emps2):
                             df_e = df_matriz[df_matriz['ASIGNADO_A'] == e].copy()
-                            df_e = df_e[df_e['PEDIDO'].isin(paginas_por_pedido.keys())]
                             color_actual = colores_division[i % len(colores_division)]
                             
                             if not df_e.empty:
@@ -588,7 +491,8 @@ with tab2:
                                 if not df_ticket.empty:
                                     p_writer_car = PyPDF2.PdfWriter()
                                     for ped in df_ticket['PEDIDO'].unique():
-                                        for pag in paginas_por_pedido[ped]: p_writer_car.add_page(pag)
+                                        if ped in paginas_por_pedido:
+                                            for pag in paginas_por_pedido[ped]: p_writer_car.add_page(pag)
                                     p_buf_car = io.BytesIO()
                                     p_writer_car.write(p_buf_car)
                                     zf.writestr(f"2_CARRITO_{e}.pdf", p_buf_car.getvalue())
@@ -596,7 +500,8 @@ with tab2:
                                 if not df_ava_pdf.empty:
                                     p_writer_ava = PyPDF2.PdfWriter()
                                     for ped in df_ava_pdf['PEDIDO'].unique():
-                                        for pag in paginas_por_pedido[ped]: p_writer_ava.add_page(pag)
+                                        if ped in paginas_por_pedido:
+                                            for pag in paginas_por_pedido[ped]: p_writer_ava.add_page(pag)
                                     p_buf_ava = io.BytesIO()
                                     p_writer_ava.write(p_buf_ava)
                                     zf.writestr(f"1_AVALANCHA_{e}.pdf", p_buf_ava.getvalue())
