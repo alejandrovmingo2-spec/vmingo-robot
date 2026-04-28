@@ -43,8 +43,11 @@ def procesar_csv(archivo, plataforma, codificacion):
             skip_lineas = i; break
     archivo.seek(0) 
     
+    # BLINDAJE ANTI NOTACIÓN CIENTÍFICA: Tratamos todo como texto
     df = pd.read_csv(archivo, skiprows=skip_lineas, encoding=codificacion, dtype=str)
     cols_map = {c.lower().strip(): c for c in df.columns}
+    
+    df_f = pd.DataFrame()
 
     if plataforma == 'TEMU':
         col_pedido = cols_map.get('id del pedido')
@@ -52,32 +55,53 @@ def procesar_csv(archivo, plataforma, codificacion):
         col_nom = cols_map.get('nombre del producto')
         col_var = cols_map.get('variación', cols_map.get('variacion'))
         col_cant = cols_map.get('cantidad a enviar')
-        df_f = df[[c for c in [col_pedido, col_sku, col_nom, col_var, col_cant] if c]].copy()
-        df_f.rename(columns={col_pedido:'PEDIDO', col_sku:'SKU', col_nom:'NOMBRE_ORIGINAL', col_var:'VARIACION', col_cant:'CANTIDAD'}, inplace=True)
+        col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento'))
+        
+        df_f['PEDIDO'] = df[col_pedido] if col_pedido else "TEMU_SD"
+        df_f['SKU'] = df[col_sku] if col_sku else ""
+        df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
+        df_f['VARIACION'] = df[col_var] if col_var else ""
+        df_f['CANTIDAD'] = df[col_cant] if col_cant else 1
+        df_f['TRACKING_ID'] = df[col_track] if col_track else ""
         
     elif plataforma == 'TIKTOK':
-        # LA SOLUCIÓN MAESTRA: Priorizar el Package ID para evitar la fusión de los 48 paquetes
-        col_order = cols_map.get('package id', cols_map.get('id del paquete', cols_map.get('order id', cols_map.get('id de pedido'))))
+        col_order_base = cols_map.get('order id', cols_map.get('id de pedido'))
+        col_pkg = cols_map.get('package id', cols_map.get('id del paquete'))
+        col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento', cols_map.get('tracking id', cols_map.get('id de seguimiento'))))
+        
         col_sku = cols_map.get('seller sku', cols_map.get('sku del vendedor'))
         col_nom = cols_map.get('product name', cols_map.get('nombre del producto'))
         col_var = cols_map.get('variation', cols_map.get('variacion'))
         col_cant = cols_map.get('quantity', cols_map.get('cantidad'))
-        col_track = cols_map.get('tracking id', cols_map.get('id de seguimiento'))
-        df_f = df[[c for c in [col_order, col_sku, col_nom, col_var, col_cant, col_track] if c]].copy()
-        df_f.rename(columns={col_order:'PEDIDO', col_sku:'SKU', col_nom:'NOMBRE_ORIGINAL', col_var:'VARIACION', col_cant:'CANTIDAD', col_track:'TRACKING_ID'}, inplace=True)
+        
+        # LA MAGIA ANTI-FUSIÓN: Si hay Tracking ID o Package ID, lo usamos como PEDIDO principal.
+        if col_track and df[col_track].notna().any(): col_main = col_track
+        elif col_pkg and df[col_pkg].notna().any(): col_main = col_pkg
+        else: col_main = col_order_base
+        
+        df_f['PEDIDO'] = df[col_main] if col_main else "TK_SD"
+        df_f['SKU'] = df[col_sku] if col_sku else ""
+        df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
+        df_f['VARIACION'] = df[col_var] if col_var else ""
+        df_f['CANTIDAD'] = df[col_cant] if col_cant else 1
+        df_f['TRACKING_ID'] = df[col_track] if col_track else ""
         
     elif plataforma == 'SHEIN':
         col_pedido = cols_map.get('número de pedido', cols_map.get('numero de pedido'))
         col_sku = cols_map.get('sku del vendedor')
         col_nom = cols_map.get('nombre del producto')
         col_var = cols_map.get('especificación', cols_map.get('especificacion'))
-        df_f = df[[c for c in [col_pedido, col_sku, col_nom, col_var] if c]].copy()
-        df_f.rename(columns={col_pedido:'PEDIDO', col_sku:'SKU', col_nom:'NOMBRE_ORIGINAL', col_var:'VARIACION'}, inplace=True)
+        col_track = cols_map.get('número de carta de porte de ida y vuelta', cols_map.get('numero de carta de porte de ida y vuelta'))
+        
+        df_f['PEDIDO'] = df[col_pedido] if col_pedido else "SH_SD"
+        df_f['SKU'] = df[col_sku] if col_sku else ""
+        df_f['NOMBRE_ORIGINAL'] = df[col_nom] if col_nom else ""
+        df_f['VARIACION'] = df[col_var] if col_var else ""
         df_f['CANTIDAD'] = 1
+        df_f['TRACKING_ID'] = df[col_track] if col_track else ""
         
     df_f['PLATAFORMA'] = plataforma
     df_f['ORDEN_ORIGINAL'] = range(len(df_f)) 
-    if 'TRACKING_ID' not in df_f.columns: df_f['TRACKING_ID'] = ""
     return df_f
 
 def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limite_cajas=15):
@@ -179,7 +203,7 @@ with tab1:
         
         if not archs or not emps: st.error("Faltan datos. Sube CSVs y escribe los nombres.")
         else:
-            with st.spinner("Licuando datos bajo las 4 Leyes Logísticas..."):
+            with st.spinner("Desvinculando paquetes de TikTok y agrupando almacén..."):
                 dicc_nom, dicc_tipo = {}, {}
                 if f_base:
                     try:
@@ -200,7 +224,7 @@ with tab1:
                 total_piezas = int(df_final['CANTIDAD'].sum())
                 
                 m1, m2 = st.columns(2)
-                m1.metric("📦 Total de Pedidos (Guías Reales) del Día", total_pedidos)
+                m1.metric("📦 Total de Pedidos/Guías Reales del Día", total_pedidos)
                 m2.metric("🧩 Total de Piezas Físicas (Volumen)", total_piezas)
                 
                 output = io.BytesIO()
@@ -271,7 +295,7 @@ with tab1:
                             hoja_ticket.set_row(3, 30); hoja_ticket.set_row(1, 25) 
                             hoja_ticket.fit_to_pages(1, 0); hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1)
                 
-                st.success("✅ ¡Tickets de Picking listos y marcados con Semáforo de Temu!")
+                st.success("✅ ¡Tickets de Picking listos y paquetes correctamente separados!")
                 st.download_button("📥 Descargar Picking Fase 1", output.getvalue(), f"Picking_Termico_{datetime.now().strftime('%d-%m-%Y')}.xlsx", "application/vnd.ms-excel")
 
 # =====================================================================
@@ -336,7 +360,6 @@ with tab2:
                     if plat_jmx == 'TIKTOK':
                         df_jmx = procesar_csv(csv_jmx, 'TIKTOK', cod_jmx)
                         for _, r in df_jmx.iterrows():
-                            # En el JMX, el pedido podría venir como 'order id' o 'package id', la función lo agarra bien
                             ped = str(r.get('PEDIDO','')).replace('.0','').strip()
                             trk = str(r.get('TRACKING_ID','')).replace('.0','').strip()
                             if ped and trk and ped != 'nan' and trk != 'nan': 
@@ -443,7 +466,6 @@ with tab2:
                             po_actual = po_encontrado
                             if po_actual not in paginas_por_pedido:
                                 paginas_por_pedido[po_actual] = []
-                            # Vacía el buffer de hojas acumuladas a este pedido
                             for p_chunk in chunk_temporal:
                                 if p_chunk not in paginas_por_pedido[po_actual]:
                                     paginas_por_pedido[po_actual].append(p_chunk)
