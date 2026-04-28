@@ -105,7 +105,6 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, limit
     emp_idx = 0
     num_emp = len(empleados)
     
-    # AISLAMIENTO SEGURO EN MEMORIA (Para no romper el orden logístico)
     for plat in ['TIKTOK', 'SHEIN', 'TEMU']:
         df_plat = df_total[df_total['PLATAFORMA'] == plat]
         if df_plat.empty: continue
@@ -177,7 +176,7 @@ with tab1:
         
         if not archs or not emps: st.error("Faltan datos. Sube CSVs y escribe los nombres.")
         else:
-            with st.spinner("Licuando datos y marcando semáforos de TEMU..."):
+            with st.spinner("Licuando datos bajo las 4 Leyes Logísticas..."):
                 dicc_nom, dicc_tipo = {}, {}
                 if f_base:
                     try:
@@ -219,7 +218,6 @@ with tab1:
                         ws_asig.set_column('A:A', 20); ws_asig.set_column('B:B', 20); ws_asig.set_column('C:C', 60); ws_asig.set_column('D:D', 15)
                     
                     for i, e in enumerate(emps):
-                        # FILTRO NUEVO CON SEMÁFORO DE TEMU (Agrupado por SKU para no duplicar pasillos)
                         df_e = df_final[(df_final['ASIGNADO_A'] == e) & (df_final['CATEGORIA'] == 'CARRITO')].groupby(
                             ['SKU','Nombre Correcto','TIPO']
                         ).agg(
@@ -254,7 +252,6 @@ with tab1:
                                 cant = int(item['CANTIDAD'])
                                 total_piezas_emp += cant
                                 
-                                # SEMÁFORO VISUAL PARA DAR LUZ VERDE DE COMPRA
                                 nombre_display = f"🟢 [TEMU - AVISAR] {item['Nombre Correcto']}" if item['TIENE_TEMU'] else item['Nombre Correcto']
                                 
                                 hoja_ticket.write(fila, 0, idx + 1, fmt_td_centro) 
@@ -279,7 +276,7 @@ with tab1:
 # =====================================================================
 with tab2:
     st.markdown("### 2. Generador de Guías y Tickets de Empaque")
-    st.info("💡 Sube los MISMOS CSVs de la mañana. Se generará **UN SOLO TICKET UNIFICADO** por empleado con todas las tiendas juntas.")
+    st.info("💡 Sube los MISMOS CSVs de la mañana. Se generará UN TICKET UNIFICADO por empleado.")
     
     col_t2, col_s2, col_k2 = st.columns(3)
     with col_t2:
@@ -305,7 +302,7 @@ with tab2:
         
         if not csvs: st.error("Sube los CSVs base para armar la matemática.")
         else:
-            with st.spinner("Unificando tiendas y leyendo PDFs..."):
+            with st.spinner("Cortando guías y recuperando pedidos perdidos..."):
                 dicc_nom2, dicc_tipo2 = {}, {}
                 if f_base2:
                     try:
@@ -349,43 +346,65 @@ with tab2:
 
                 paginas_por_pedido = {}
                 
+                # =========================================================
+                # CEREBRO 1: TIKTOK (MATCH DIRECTO CON EXCEL)
+                # =========================================================
                 if pdf_k2: 
                     reader_tk = PyPDF2.PdfReader(pdf_k2)
                     temp_pages = {}
-                    po_actual = None
+                    jmx_actual = None
+                    
+                    tracking_ids_tiktok = [str(x).replace('.0','').strip().upper() for x in df_matriz[df_matriz['PLATAFORMA'] == 'TIKTOK']['TRACKING_ID'] if x and str(x) != 'NAN']
+                    
                     for p in reader_tk.pages:
                         txt_puro = p.extract_text() or ""
                         txt_limpio = txt_puro.replace(" ", "").replace("\n", "").upper()
-                        matches = re.findall(r'(JMX\d+|GSH\d+|99M\d+|BIGT\d*)', txt_limpio)
-                        if matches:
-                            po_actual = str(matches[0]).strip()
-                            if po_actual not in temp_pages: temp_pages[po_actual] = []
-                            if p not in temp_pages[po_actual]: temp_pages[po_actual].append(p)
-                        else:
-                            if po_actual:
-                                if p not in temp_pages[po_actual]: temp_pages[po_actual].append(p)
+                        
+                        found_trk = None
+                        for trk in tracking_ids_tiktok:
+                            if trk and trk in txt_limpio:
+                                found_trk = trk
+                                break
                                 
+                        if not found_trk:
+                            matches = re.findall(r'(JMX\d+|GSH\d+|99M\d+|BIGT\d*|JT\d+|MX\d+)', txt_limpio)
+                            if matches: found_trk = str(matches[0]).strip()
+                            
+                        if found_trk:
+                            jmx_actual = found_trk
+                            if jmx_actual not in temp_pages: temp_pages[jmx_actual] = []
+                            
+                        if jmx_actual:
+                            if p not in temp_pages[jmx_actual]: temp_pages[jmx_actual].append(p)
+                            
                     for jmx_key, pags in temp_pages.items():
                         pedido_real = mapa_pedidos_tiktok.get(jmx_key, jmx_key)
                         if pedido_real not in paginas_por_pedido: paginas_por_pedido[pedido_real] = []
                         for pag in pags:
                             if pag not in paginas_por_pedido[pedido_real]: paginas_por_pedido[pedido_real].append(pag)
 
+                # =========================================================
+                # CEREBRO 2: TEMU (MEMORIA ADHESIVA RESTAURADA)
+                # =========================================================
                 if pdf_t2: 
                     reader_temu = PyPDF2.PdfReader(pdf_t2)
-                    chunk_temporal = []
+                    po_actual = None
                     for pagina in reader_temu.pages:
                         txt_puro = pagina.extract_text() or ""
                         txt_limpio = txt_puro.replace(" ", "").replace("\n", "").upper()
-                        chunk_temporal.append(pagina)
-                        matches = re.findall(r'(PO-\d+-\d+)', txt_limpio)
+                        matches = re.findall(r'(PO-[\d\-A-Z]+)', txt_limpio)
                         if matches:
-                            po_encontrado = str(matches[0]).strip()
-                            if po_encontrado not in paginas_por_pedido:
-                                paginas_por_pedido[po_encontrado] = []
-                            paginas_por_pedido[po_encontrado].extend(chunk_temporal)
-                            chunk_temporal = [] 
+                            po_actual = str(matches[0]).strip()
+                            if po_actual not in paginas_por_pedido:
+                                paginas_por_pedido[po_actual] = []
+                        
+                        if po_actual:
+                            if pagina not in paginas_por_pedido[po_actual]:
+                                paginas_por_pedido[po_actual].append(pagina)
 
+                # =========================================================
+                # CEREBRO 3: SHEIN (REGLA DE DECLARACIÓN)
+                # =========================================================
                 if pdf_s2: 
                     reader_shein = PyPDF2.PdfReader(pdf_s2)
                     chunks_pdf = []
@@ -393,10 +412,11 @@ with tab2:
                     for pagina in reader_shein.pages:
                         txt_puro = pagina.extract_text() or ""
                         txt_upper = txt_puro.upper().replace(" ", "").replace("\n", "")
-                        es_declaracion = 'DECLARACI' in txt_upper
-                        tiene_indicadores = re.search(r'(JMX|GSH|J&T|TODOOR|D2D|99M|BIGT|ESTAFETA|FEDEX|DHL|AMPM|PAQUETEXPRESS|REDPACK|RABBIT)', txt_upper)
                         
-                        if tiene_indicadores and not es_declaracion:
+                        # Si la hoja NO es una declaración, obligatoriamente empieza un pedido nuevo
+                        es_declaracion = re.search(r'(DECLARACI|CUSTOMS|INVOICE)', txt_upper)
+                        
+                        if not es_declaracion:
                             if chunk_actual: chunks_pdf.append(chunk_actual)
                             chunk_actual = [pagina]
                         else:
@@ -408,6 +428,7 @@ with tab2:
                     for i, ped in enumerate(peds_s):
                         if i < len(chunks_pdf): paginas_por_pedido[ped] = chunks_pdf[i]
 
+                # --- MÉTRICAS ---
                 total_encontrados = len(paginas_por_pedido)
                 st.metric("🎯 Guías Físicas Encontradas y Cortadas", total_encontrados)
 
@@ -433,7 +454,6 @@ with tab2:
                             if not df_e.empty:
                                 df_e[['PEDIDO','TRACKING_ID','PLATAFORMA','SKU','Nombre Correcto','CANTIDAD', 'CATEGORIA']].to_excel(writer, sheet_name=e, index=False)
                                 
-                                # TICKET UNIFICADO CON LAS 3 PLATAFORMAS REVUELTAS
                                 df_ticket = df_e[df_e['CATEGORIA'] == 'CARRITO'].copy()
                                 if not df_ticket.empty:
                                     picking_list = df_ticket.groupby(['SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
