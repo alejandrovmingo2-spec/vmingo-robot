@@ -187,10 +187,9 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, activ
 col_logo, col_title = st.columns([1, 5])
 with col_logo:
     try:
-        # Asegúrate de nombrar tu imagen exactamente así en tu carpeta
         st.image("logo_vmingo.png", use_column_width=True)
     except:
-        pass # Si no encuentra el logo, la app sigue funcionando
+        pass 
 with col_title:
     st.title("🤖 Vmingo ERP: Coordinador Maestro")
 
@@ -260,8 +259,11 @@ with tab1:
                             
                             df_tkt = df_e[df_e['CATEGORIA'] == 'CARRITO'].copy()
                             if not df_tkt.empty:
-                                picking_list = df_tkt.groupby(['SKU', 'Nombre Correcto']).agg(CANTIDAD=('CANTIDAD', 'sum'), TIENE_TEMU=('PLATAFORMA', lambda x: 'TEMU' in x.values)).reset_index()
+                                # CONTADOR INTELIGENTE POR TIENDA
+                                df_tkt['CANT_TEMU'] = df_tkt.apply(lambda x: x['CANTIDAD'] if x['PLATAFORMA'] == 'TEMU' else 0, axis=1)
+                                picking_list = df_tkt.groupby(['SKU', 'Nombre Correcto']).agg(CANTIDAD=('CANTIDAD', 'sum'), CANT_TEMU=('CANT_TEMU', 'sum')).reset_index()
                                 picking_list = picking_list.sort_values(by='Nombre Correcto').reset_index(drop=True)
+                                
                                 color_actual = colores_division[i % len(colores_division)]
                                 hoja_ticket = writer.book.add_worksheet(f"🛒 {e}_Ticket")
                                 fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
@@ -276,14 +278,23 @@ with tab1:
                                 for col, enc in enumerate(['NO', 'SKU', 'NOMBRE COMUN', 'CANTI\nDAD']):
                                     if enc == 'CANTI\nDAD': hoja_ticket.write(3, col, enc, fmt_wrap)
                                     else: hoja_ticket.write(3, col, enc, fmt_header)
+                                
                                 total_p = 0
                                 for row_idx, item in picking_list.iterrows():
-                                    cant = int(item['CANTIDAD']); total_p += cant
-                                    nom = f"🟢 [TEMU - AVISAR] {item['Nombre Correcto']}" if item['TIENE_TEMU'] else item['Nombre Correcto']
+                                    cant = int(item['CANTIDAD'])
+                                    cant_temu = int(item['CANT_TEMU'])
+                                    total_p += cant
+                                    
+                                    if cant_temu > 0:
+                                        nom = f"{item['Nombre Correcto']} \n(🟢 OJO: {cant_temu} piezas son de TEMU)"
+                                    else:
+                                        nom = item['Nombre Correcto']
+                                        
                                     hoja_ticket.write(row_idx + 4, 0, row_idx + 1, fmt_td_centro) 
                                     hoja_ticket.write(row_idx + 4, 1, item['SKU'], fmt_td_centro)            
                                     hoja_ticket.write(row_idx + 4, 2, nom, fmt_td_izq)  
                                     hoja_ticket.write(row_idx + 4, 3, cant, fmt_td_centro)     
+                                
                                 hoja_ticket.write(len(picking_list) + 4, 0, len(picking_list) + 1, fmt_td_centro)
                                 hoja_ticket.merge_range(len(picking_list) + 4, 1, len(picking_list) + 4, 2, 'Total de Carrito', fmt_total)
                                 hoja_ticket.write(len(picking_list) + 4, 3, total_p, fmt_total)
@@ -368,7 +379,7 @@ with tab2:
             stats = {"TEMU": 0, "SHEIN": 0, "TIKTOK": 0}
 
             # =========================================================
-            # TU CÓDIGO INTACTO DE TEMU (JALANDO LA PÁGINA ANTERIOR)
+            # TU CÓDIGO INTACTO DE TEMU
             # =========================================================
             if pdf_t2:
                 reader_te = PyPDF2.PdfReader(pdf_t2)
@@ -466,8 +477,11 @@ with tab2:
                             
                             df_tkt = df_e_completo[df_e_completo['CATEGORIA'] == 'CARRITO'].copy()
                             if not df_tkt.empty:
-                                picking_list = df_tkt.groupby(['SKU', 'Nombre Correcto']).agg(CANTIDAD=('CANTIDAD', 'sum'), TIENE_TEMU=('PLATAFORMA', lambda x: 'TEMU' in x.values)).reset_index()
+                                # CONTADOR INTELIGENTE POR TIENDA
+                                df_tkt['CANT_TEMU'] = df_tkt.apply(lambda x: x['CANTIDAD'] if x['PLATAFORMA'] == 'TEMU' else 0, axis=1)
+                                picking_list = df_tkt.groupby(['SKU', 'Nombre Correcto']).agg(CANTIDAD=('CANTIDAD', 'sum'), CANT_TEMU=('CANT_TEMU', 'sum')).reset_index()
                                 picking_list = picking_list.sort_values(by='Nombre Correcto').reset_index(drop=True)
+                                
                                 color_actual = colores_division[i % len(colores_division)]
                                 hoja_ticket = writer.book.add_worksheet(f"🛒 {e}_Ticket")
                                 fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
@@ -482,14 +496,23 @@ with tab2:
                                 for col, enc in enumerate(['NO', 'SKU', 'NOMBRE COMUN', 'CANTI\nDAD']):
                                     if enc == 'CANTI\nDAD': hoja_ticket.write(3, col, enc, fmt_wrap)
                                     else: hoja_ticket.write(3, col, enc, fmt_header)
+                                
                                 total_p = 0
                                 for row_idx, item in picking_list.iterrows():
-                                    cant = int(item['CANTIDAD']); total_p += cant
-                                    nom = f"🟢 [TEMU - AVISAR] {item['Nombre Correcto']}" if item['TIENE_TEMU'] else item['Nombre Correcto']
+                                    cant = int(item['CANTIDAD'])
+                                    cant_temu = int(item['CANT_TEMU'])
+                                    total_p += cant
+                                    
+                                    if cant_temu > 0:
+                                        nom = f"{item['Nombre Correcto']} \n(🟢 OJO: {cant_temu} piezas son de TEMU)"
+                                    else:
+                                        nom = item['Nombre Correcto']
+                                        
                                     hoja_ticket.write(row_idx + 4, 0, row_idx + 1, fmt_td_centro) 
                                     hoja_ticket.write(row_idx + 4, 1, item['SKU'], fmt_td_centro)            
                                     hoja_ticket.write(row_idx + 4, 2, nom, fmt_td_izq)  
                                     hoja_ticket.write(row_idx + 4, 3, cant, fmt_td_centro)     
+                                
                                 hoja_ticket.write(len(picking_list) + 4, 0, len(picking_list) + 1, fmt_td_centro)
                                 hoja_ticket.merge_range(len(picking_list) + 4, 1, len(picking_list) + 4, 2, 'Total de Empaque', fmt_total)
                                 hoja_ticket.write(len(picking_list) + 4, 3, total_p, fmt_total)
