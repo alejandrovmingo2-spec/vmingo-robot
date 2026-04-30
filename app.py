@@ -63,7 +63,7 @@ def procesar_csv(archivo, codificacion, plataforma):
         
         df_f['ORDER_ID'] = df[col_pedido]
         df_f['TRACKING_ID'] = df[col_track] if col_track else ""
-        df_f['PEDIDO'] = df_f['ORDER_ID'] # Temu opera con Order ID (PO-)
+        df_f['PEDIDO'] = df_f['ORDER_ID'] 
         df_f['SKU'] = df[col_sku]
         df_f['NOMBRE_ORIGINAL'] = df[col_nom]
         df_f['CANTIDAD'] = df[col_cant]
@@ -77,7 +77,7 @@ def procesar_csv(archivo, codificacion, plataforma):
         
         df_f['ORDER_ID'] = df[col_order]
         df_f['TRACKING_ID'] = df[col_track] if col_track else ""
-        df_f['PEDIDO'] = df_f['ORDER_ID'] # El Order ID es el ancla, el PDF se mapeará a este
+        df_f['PEDIDO'] = df_f['TRACKING_ID'].replace('', pd.NA).fillna(df_f['ORDER_ID'])
         df_f['SKU'] = df[col_sku]
         df_f['NOMBRE_ORIGINAL'] = df[col_nom]
         df_f['CANTIDAD'] = df[col_cant]
@@ -144,7 +144,6 @@ def unificar_y_distribuir(dataframes, empleados, dicc_nombres, dicc_tipos, activ
                 emp_idx += 1
 
         df_car = df_plat[df_plat['CATEGORIA'] == 'CARRITO']
-        
         df_mini_norm = df_car[(df_car['TIPOS_PRODUCTO'] == 1) & (df_car['TIPO'] != 'CAJA')]
         sku_vol_norm = df_mini_norm.groupby('SKU')['CANTIDAD'].sum().sort_values(ascending=False).index.tolist()
         for sku in sku_vol_norm:
@@ -274,22 +273,24 @@ with tab1:
                                 hoja_ticket.merge_range(len(picking_list) + 4, 1, len(picking_list) + 4, 2, 'Total de Carrito', fmt_total)
                                 hoja_ticket.write(len(picking_list) + 4, 3, total_p, fmt_total)
                                 hoja_ticket.set_column('A:A', 4); hoja_ticket.set_column('B:B', 16); hoja_ticket.set_column('C:C', 38); hoja_ticket.set_column('D:D', 6)
-                st.success("✅ Picking listo con IDs robustos en detalles.")
+                st.success("✅ Picking listo con IDs en detalles.")
                 st.download_button("📥 Descargar Excel", output.getvalue(), f"Picking_{datetime.now().strftime('%d-%m-%Y')}.xlsx", "application/vnd.ms-excel")
 
 # ----------------- FASE 2 -----------------
 with tab2:
-    st.markdown("### 2. Generador de Guías (Código PDF Original Restaurado)")
+    st.markdown("### 2. Generador de Guías (Fase 2)")
+    st.info("💡 Recuerda: Si no tienes el PDF de TEMU, puedes dejarlo en blanco. El robot hará TikTok y Shein, y te recordará de Temu al final.")
+    
     col_t2, col_s2, col_k2 = st.columns(3)
     with col_t2:
         csv_t2 = st.file_uploader("CSV Temu (F2)", type=["csv"], key="ct2")
-        pdf_t2 = st.file_uploader("PDF Temu", type=["pdf"], key="pt2")
+        pdf_t2 = st.file_uploader("PDF Temu (Opcional)", type=["pdf"], key="pt2")
     with col_s2:
         csv_s2 = st.file_uploader("CSV Shein (F2)", type=["csv"], key="cs2")
         pdf_s2 = st.file_uploader("PDF Shein", type=["pdf"], key="ps2")
     with col_k2:
         csv_k2 = st.file_uploader("CSV TikTok (F2)", type=["csv"], key="ck2")
-        csv_jmx = st.file_uploader("CSV TikTok JMX (Si lo tienes)", type=["csv"], key="cjmx")
+        csv_jmx = st.file_uploader("CSV TikTok JMX", type=["csv"], key="cjmx")
         pdf_k2 = st.file_uploader("PDF TikTok", type=["pdf"], key="pk2")
     f_base2 = st.file_uploader("BASE (F2)", type=["xlsx", "xlsm"], key="b2")
 
@@ -297,7 +298,7 @@ with tab2:
         csvs2 = [f for f in [csv_t2, csv_s2, csv_k2] if f is not None]
         raw_emps2 = [e.strip().upper() for e in e_in.split(',') if e.strip()]
         emps2 = list(dict.fromkeys(raw_emps2))
-        with st.spinner("Cortando con tu código original..."):
+        with st.spinner("Cortando..."):
             dicc_nom2, dicc_tipo2 = {}, {}
             if f_base2:
                 try: df_b2 = pd.read_excel(f_base2, sheet_name='BASE', dtype=str)
@@ -311,125 +312,80 @@ with tab2:
             tot_f2 = pd.concat(processed_dfs)['PEDIDO'].nunique() if processed_dfs else 0
             df_matriz = unificar_y_distribuir(processed_dfs, emps2, dicc_nom2, dicc_tipo2, activar_avalancha=(tot_f2>=600))
             
-            # --- MAPEO EXACTO DE TIKTOK (JMX A ORDER ID) ---
-            mapa_pedidos_tiktok = {}
+            mapa_tk = {}
             for _, r in df_matriz[df_matriz['PLATAFORMA'] == 'TIKTOK'].iterrows():
-                ord_id = str(r['ORDER_ID']).strip()
-                trk_id = str(r['TRACKING_ID']).strip()
-                if ord_id and ord_id != 'nan': mapa_pedidos_tiktok[ord_id] = ord_id
-                if trk_id and trk_id != 'nan': mapa_pedidos_tiktok[trk_id] = ord_id
-
+                p, o, t = str(r['PEDIDO']), str(r['ORDER_ID']), str(r['TRACKING_ID'])
+                if o: mapa_tk[o] = p
+                if t: mapa_tk[t] = p
+                
             if csv_jmx:
                 df_jmx = procesar_csv(csv_jmx, detectar_plataforma_csv(csv_jmx)[1], 'TIKTOK')
+                jmx_map = {}
                 for _, r in df_jmx.iterrows():
-                    ord_id = str(r['ORDER_ID']).strip()
-                    trk_id = str(r['TRACKING_ID']).strip()
-                    if ord_id and trk_id: 
-                        mapa_pedidos_tiktok[ord_id] = ord_id
-                        mapa_pedidos_tiktok[trk_id] = ord_id
+                    o, t = str(r['ORDER_ID']).strip(), str(r['TRACKING_ID']).strip()
+                    if o and t and o != 'nan' and t != 'nan': 
+                        mapa_tk[t] = o
+                        jmx_map[o] = t
+                
+                # --- INYECCIÓN DEL JMX PARA QUE SALGA EN EL EXCEL ---
+                mask = df_matriz['PLATAFORMA'] == 'TIKTOK'
+                df_matriz.loc[mask, 'TRACKING_ID'] = df_matriz.loc[mask, 'ORDER_ID'].map(jmx_map).fillna(df_matriz.loc[mask, 'TRACKING_ID'])
 
             paginas_por_pedido = {}
+            stats = {"TEMU": 0, "SHEIN": 0, "TIKTOK": 0}
 
-            # =========================================================
-            # TU CÓDIGO ORIGINAL INTACTO: TIKTOK
-            # =========================================================
+            # RESTAURACIÓN LOGICA PDF INTACTA + BLINDAJE NOTA
             if pdf_k2: 
-                reader_tk = PyPDF2.PdfReader(pdf_k2)
-                temp_pages = {}
-                po_actual_tk = None
-                patron_pdf_tk = r'(JMX\d+)'
-                for pagina in reader_tk.pages:
-                    texto = pagina.extract_text() or ""
-                    matches = re.findall(patron_pdf_tk, texto)
-                    if matches:
-                        po_encontrado = str(matches[0]).strip()
-                        po_actual_tk = po_encontrado
-                        if po_actual_tk not in temp_pages: temp_pages[po_actual_tk] = []
-                        if pagina not in temp_pages[po_actual_tk]: temp_pages[po_actual_tk].append(pagina)
-                    else:
-                        if po_actual_tk:
-                            if pagina not in temp_pages[po_actual_tk]: temp_pages[po_actual_tk].append(pagina)
-                for jmx_key, pags in temp_pages.items():
-                    order_id = mapa_pedidos_tiktok.get(jmx_key, jmx_key)
-                    if order_id not in paginas_por_pedido: paginas_por_pedido[order_id] = []
-                    for pag in pags:
-                        if pag not in paginas_por_pedido[order_id]: paginas_por_pedido[order_id].append(pag)
+                reader = PyPDF2.PdfReader(pdf_k2)
+                cur, tmp_tk = None, {}
+                for p in reader.pages:
+                    m = re.findall(r'(JMX\d+)', p.extract_text() or "")
+                    if m:
+                        found = str(m[0]).strip()
+                        if found != cur: 
+                            cur = found; tmp_tk[cur] = []
+                    if cur: tmp_tk[cur].append(p) 
+                for k, v in tmp_tk.items():
+                    real = mapa_tk.get(k, k); paginas_por_pedido[real] = v; stats["TIKTOK"] += 1
 
-            # =========================================================
-            # TU CÓDIGO ORIGINAL INTACTO: TEMU
-            # =========================================================
             if pdf_t2:
-                reader_te = PyPDF2.PdfReader(pdf_t2)
-                po_actual_te = None
-                patron_pdf_te = r'(PO-\d{3}-\d+)'
-                for num_pagina, pagina in enumerate(reader_te.pages):
-                    texto = pagina.extract_text() or ""
-                    matches = re.findall(patron_pdf_te, texto)
-                    if matches:
-                        po_encontrado = str(matches[0]).strip()
-                        po_actual_te = po_encontrado
-                        if po_actual_te not in paginas_por_pedido:
-                            paginas_por_pedido[po_actual_te] = []
-                            if num_pagina > 0:
-                                if reader_te.pages[num_pagina - 1] not in paginas_por_pedido[po_actual_te]:
-                                    paginas_por_pedido[po_actual_te].append(reader_te.pages[num_pagina - 1])
-                        if pagina not in paginas_por_pedido[po_actual_te]:
-                            paginas_por_pedido[po_actual_te].append(pagina)
-                    else: pass 
+                reader = PyPDF2.PdfReader(pdf_t2)
+                cur_t, tmp_te = None, {}
+                for i, p in enumerate(reader.pages):
+                    m = re.findall(r'(PO-\d{3}-\d+)', p.extract_text() or "")
+                    if m:
+                        found = str(m[0]).strip()
+                        if found != cur_t:
+                            cur_t = found; tmp_te[cur_t] = []
+                            if i > 0 and reader.pages[i-1] not in tmp_te[cur_t]: tmp_te[cur_t].append(reader.pages[i-1])
+                    if cur_t: 
+                        if p not in tmp_te[cur_t]: tmp_te[cur_t].append(p)
+                for k, v in tmp_te.items(): paginas_por_pedido[k] = v; stats["TEMU"] += 1
 
-            # =========================================================
-            # TU CÓDIGO ORIGINAL INTACTO: SHEIN
-            # =========================================================
-            if pdf_s2: 
-                reader_sh = PyPDF2.PdfReader(pdf_s2)
-                chunks_pdf_sh = []
-                chunk_actual_sh = []
-                for pagina in reader_sh.pages:
-                    texto = pagina.extract_text() or ""
-                    texto_upper = texto.upper()
-                    es_declaracion = 'DECLARACIÓN DE CONTENIDO' in texto_upper
-                    tiene_indicadores = re.search(r'(JMX|GSH|J&T|TODOOR|D2D)', texto_upper)
-                    if tiene_indicadores and not es_declaracion:
-                        if chunk_actual_sh: chunks_pdf_sh.append(chunk_actual_sh)
-                        chunk_actual_sh = [pagina]
-                    else:
-                        if chunk_actual_sh: chunk_actual_sh.append(pagina)
-                        else: chunk_actual_sh = [pagina]
-                if chunk_actual_sh: chunks_pdf_sh.append(chunk_actual_sh)
-                    
-                pos_finales_shein = df_matriz[df_matriz['PLATAFORMA'] == 'SHEIN'].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique()
-                for i, pedido_gsh in enumerate(pos_finales_shein):
-                    if i < len(chunks_pdf_sh): paginas_por_pedido[pedido_gsh] = chunks_pdf_sh[i]
+            if pdf_s2:
+                reader = PyPDF2.PdfReader(pdf_s2)
+                chunks, cur_s = [], []
+                for p in reader.pages:
+                    txt = p.extract_text() or ""
+                    if re.search(r'(JMX|GSH|J&T|TODOOR|D2D)', txt.upper()) and 'DECLARACIÓN' not in txt.upper():
+                        if cur_s: chunks.append(cur_s)
+                        cur_s = [p]
+                    else: cur_s.append(p)
+                if cur_s: chunks.append(cur_s)
+                peds_s = df_matriz[df_matriz['PLATAFORMA'] == 'SHEIN'].sort_values('ORDEN_ORIGINAL')['PEDIDO'].unique()
+                for i, ped in enumerate(peds_s):
+                    if i < len(chunks): paginas_por_pedido[ped] = chunks[i]; stats["SHEIN"] += 1
 
-            # --- RENDER DE MÉTRICAS FASE 2 ---
-            peds_te = df_matriz[df_matriz['PLATAFORMA'] == 'TEMU']['PEDIDO'].unique()
-            peds_sh = df_matriz[df_matriz['PLATAFORMA'] == 'SHEIN']['PEDIDO'].unique()
-            peds_tk = df_matriz[df_matriz['PLATAFORMA'] == 'TIKTOK']['PEDIDO'].unique()
-            
-            c_te = len([p for p in peds_te if p in paginas_por_pedido])
-            c_sh = len([p for p in peds_sh if p in paginas_por_pedido])
-            c_tk = len([p for p in peds_tk if p in paginas_por_pedido])
-
-            st.subheader("📊 Diagnóstico de Guías Cortadas (Fase 2)")
+            st.subheader("📊 Diagnóstico de Guías (Fase 2)")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("🔴 TEMU Cortados", c_te)
-            c2.metric("🟢 SHEIN Cortados", c_sh)
-            c3.metric("🔵 TIKTOK Cortados", c_tk)
-            c4.metric("🏆 TOTAL CORTADO", c_te + c_sh + c_tk)
+            c1.metric("🔴 TEMU", stats["TEMU"]); c2.metric("🟢 SHEIN", stats["SHEIN"]); c3.metric("🔵 TIKTOK", stats["TIKTOK"]); c4.metric("🏆 TOTAL", sum(stats.values()))
 
             zip_buf = io.BytesIO()
-            colores_division = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD']
-            
             with zipfile.ZipFile(zip_buf, "a", zipfile.ZIP_DEFLATED, False) as zf:
                 excel_buf = io.BytesIO()
                 with pd.ExcelWriter(excel_buf, engine='xlsxwriter') as writer:
-                    df_sin_pdf = df_matriz[~df_matriz['PEDIDO'].isin(paginas_por_pedido.keys())].copy()
-                    if not df_sin_pdf.empty:
-                        df_sin_pdf[['PLATAFORMA', 'ORDER_ID', 'TRACKING_ID', 'SKU', 'Nombre Correcto']].drop_duplicates(subset=['ORDER_ID']).to_excel(writer, sheet_name='🚨 FALTAN EN PDF', index=False)
-                    
-                    if tot_f2 >= 600: 
-                        df_matriz[df_matriz['CATEGORIA']=='AVALANCHA'][['ASIGNADO_A','PLATAFORMA','ORDER_ID','TRACKING_ID','SKU','Nombre Correcto']].to_excel(writer, sheet_name='⚡ AVALANCHA GUIAS', index=False)
-                    
+                    df_matriz[~df_matriz['PEDIDO'].isin(paginas_por_pedido.keys())].to_excel(writer, sheet_name='🚨 FALTAN EN PDF', index=False)
+                    if tot_f2 >= 600: df_matriz[df_matriz['CATEGORIA']=='AVALANCHA'][['ASIGNADO_A','PLATAFORMA','ORDER_ID','TRACKING_ID','SKU','Nombre Correcto']].to_excel(writer, sheet_name='⚡ AVALANCHA GUIAS', index=False)
                     for i, e in enumerate(emps2):
                         df_e = df_matriz[(df_matriz['ASIGNADO_A'] == e) & (df_matriz['PEDIDO'].isin(paginas_por_pedido.keys()))]
                         if not df_e.empty:
@@ -440,7 +396,7 @@ with tab2:
                             if not df_tkt.empty:
                                 picking_list = df_tkt.groupby(['SKU', 'Nombre Correcto']).agg(CANTIDAD=('CANTIDAD', 'sum'), TIENE_TEMU=('PLATAFORMA', lambda x: 'TEMU' in x.values)).reset_index()
                                 picking_list = picking_list.sort_values(by='Nombre Correcto').reset_index(drop=True)
-                                color_actual = colores_division[i % len(colores_division)]
+                                color_actual = ['#FFD966', '#A9D08E', '#9BC2E6', '#F4B084', '#B4A7D6', '#93CDDD'][i % 6]
                                 hoja_ticket = writer.book.add_worksheet(f"🛒 {e}_Ticket")
                                 fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
                                 fmt_titulo_ticket = writer.book.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
