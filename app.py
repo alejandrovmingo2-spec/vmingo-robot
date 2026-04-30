@@ -279,7 +279,7 @@ with tab1:
 # ----------------- FASE 2 -----------------
 with tab2:
     st.markdown("### 2. Generador de Guías (Fase 2)")
-    st.info("💡 Recuerda: Si no tienes el PDF de TEMU, puedes dejarlo en blanco. El robot hará TikTok y Shein, y te recordará de Temu al final.")
+    st.info("💡 Recuerda: Si no tienes el PDF de TEMU, puedes dejarlo en blanco. El robot hará TikTok y Shein, y te recordará de Temu al final. Luego puedes correr solo Temu subiendo su CSV y PDF.")
     
     col_t2, col_s2, col_k2 = st.columns(3)
     with col_t2:
@@ -329,6 +329,7 @@ with tab2:
                 
                 # --- INYECCIÓN DEL JMX PARA QUE SALGA EN EL EXCEL ---
                 mask = df_matriz['PLATAFORMA'] == 'TIKTOK'
+                # Aplicamos el mapeo para rellenar los vacíos en TRACKING_ID usando el ORDER_ID
                 df_matriz.loc[mask, 'TRACKING_ID'] = df_matriz.loc[mask, 'ORDER_ID'].map(jmx_map).fillna(df_matriz.loc[mask, 'TRACKING_ID'])
 
             paginas_por_pedido = {}
