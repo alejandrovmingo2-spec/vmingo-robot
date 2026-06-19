@@ -457,4 +457,3 @@ if 'descarga_lista' in st.session_state:
         mime="application/zip",
         type="primary"
     )
-CODIGO CHIDO VMINGO SHEIN
