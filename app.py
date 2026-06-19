@@ -92,12 +92,13 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 break
                 
         archivo_csv.seek(0) 
-        df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion)
+        # ESCUDO ANTI-MUTACIÓN: Forzamos la lectura estricta como texto plano (dtype=str)
+        df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion, dtype=str)
         
         # Mapeo robusto de columnas sin importar mayúsculas
         cols_map = {c.lower().strip(): c for c in df.columns}
 
-        # --- DICCIONARIO INTELIGENTE (Para TikTok y Temu) ---
+        # --- DICCIONARIO MAESTRO INTERNO (Para TikTok y Temu) ---
         mapa_pedidos_cruzados = {}
         if plataforma in ['TIKTOK', 'TEMU']:
             if plataforma == 'TIKTOK':
@@ -105,7 +106,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 col_track = cols_map.get('tracking id')
             else: # TEMU
                 col_order = cols_map.get('id del pedido')
-                col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento'))
+                col_track = None
+                for c in cols_map:
+                    if 'seguimiento' in c or 'tracking' in c:
+                        col_track = cols_map[c]
+                        break
                 
             for idx, row in df.iterrows():
                 order_id = str(row.get(col_order, '')).replace('.0', '').strip() if col_order else ''
@@ -252,7 +257,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
             
             for num_pagina, pagina in enumerate(reader.pages):
                 texto_original = pagina.extract_text() or ""
-                texto_limpio = re.sub(r'\s+', '', texto_original) # Quita espacios y saltos de línea invisibles
+                texto_limpio = re.sub(r'\s+', '', texto_original) # Aplasta los espacios para burlar el formato de iMile
                 
                 # Buscamos en el original y en el limpio para no fallar
                 matches = re.findall(patron_pdf, texto_original) + re.findall(patron_pdf, texto_limpio)
@@ -308,15 +313,16 @@ if st.button("🚀 Procesar Guías", type="primary"):
                             paginas_por_po[po_actual].append(pagina)
 
             # Cruce de JMX a Order ID para TikTok
-            paginas_corregidas = {}
-            for jmx_key, paginas in paginas_por_po.items():
-                order_id = mapa_pedidos_cruzados.get(jmx_key, jmx_key)
-                if order_id not in paginas_corregidas:
-                    paginas_corregidas[order_id] = []
-                for pag in paginas:
-                    if pag not in paginas_corregidas[order_id]:
-                        paginas_corregidas[order_id].append(pag)
-            paginas_por_po = paginas_corregidas
+            if plataforma == 'TIKTOK':
+                paginas_corregidas = {}
+                for jmx_key, paginas in paginas_por_po.items():
+                    order_id = mapa_pedidos_cruzados.get(jmx_key, jmx_key)
+                    if order_id not in paginas_corregidas:
+                        paginas_corregidas[order_id] = []
+                    for pag in paginas:
+                        if pag not in paginas_corregidas[order_id]:
+                            paginas_corregidas[order_id].append(pag)
+                paginas_por_po = paginas_corregidas
             
         # Filtramos la lista maestra de CSV basándonos en lo que se armó en los PDFs
         lista_pos_pdf = list(paginas_por_po.keys())
