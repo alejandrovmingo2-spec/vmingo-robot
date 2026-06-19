@@ -48,7 +48,7 @@ empleados_input = st.text_input("Nombres del equipo en turno (separados por coma
 
 if st.button("🚀 Procesar Guías", type="primary"):
     if not archivo_csv or not archivo_pdf:
-        st.error("❌ Error: Faltan archivos. Asegúrate de subir el CSV y el PDF.")
+        st.error("❌ Error: Faltan archivos. Asegúrate de subir el CSV and el PDF.")
         st.stop()
 
     empleados = [e.strip() for e in empleados_input.split(',') if e.strip()]
@@ -97,18 +97,24 @@ if st.button("🚀 Procesar Guías", type="primary"):
         # Mapeo robusto de columnas sin importar mayúsculas
         cols_map = {c.lower().strip(): c for c in df.columns}
 
-        # DICCIONARIO (Solo necesario para TikTok)
-        mapa_pedidos_tiktok = {}
-        if plataforma == 'TIKTOK':
-            col_order = cols_map.get('order id')
-            col_track = cols_map.get('tracking id')
+        # --- DICCIONARIO MAESTRO DE TRADUCCIÓN ---
+        mapa_pedidos_cruzados = {}
+        if plataforma in ['TIKTOK', 'TEMU']:
+            if plataforma == 'TIKTOK':
+                col_order = cols_map.get('order id')
+                col_track = cols_map.get('tracking id')
+            else: # TEMU
+                col_order = cols_map.get('id del pedido')
+                col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento'))
+                
             for idx, row in df.iterrows():
                 order_id = str(row.get(col_order, '')).replace('.0', '').strip() if col_order else ''
                 tracking_id = str(row.get(col_track, '')).replace('.0', '').strip() if col_track else ''
+                
                 if order_id and order_id != 'nan':
-                    mapa_pedidos_tiktok[order_id] = order_id
+                    mapa_pedidos_cruzados[order_id] = order_id
                 if tracking_id and tracking_id != 'nan':
-                    mapa_pedidos_tiktok[tracking_id] = order_id
+                    mapa_pedidos_cruzados[tracking_id] = order_id
 
         # LIMPIEZA Y FILTRADO DEL CSV DEPENDIENDO LA PLATAFORMA
         if plataforma == 'TEMU':
@@ -188,14 +194,14 @@ if st.button("🚀 Procesar Guías", type="primary"):
         )
         df_filtrado['Nombre Correcto'] = df_filtrado['Nombre Correcto'].fillna('SIN NOMBRE').astype(str)
 
-        # EL ORDEN SAGRADO DEL CSV (Lista única de pedidos tal como vienen exportados)
+        # EL ORDEN SAGRADO DEL CSV
         pos_finales_reales = list(dict.fromkeys(df_filtrado['PEDIDO'].tolist()))
 
         # --- 2. LEYENDO PDF (3 CEREBROS INDEPENDIENTES) ---
         paginas_por_po = {}
         reader = PyPDF2.PdfReader(archivo_pdf)
         
-        # === CEREBRO 1: SHEIN (Código exacto proporcionado, sin búsquedas) ===
+        # === CEREBRO 1: SHEIN (Código intacto original) ===
         if plataforma == 'SHEIN':
             chunks_pdf = []
             chunk_actual = []
@@ -239,9 +245,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 else:
                     paginas_por_po[pedido_gsh] = []
 
-        # === CEREBRO 2: TEMU (Python original estricto) ===
+        # === CEREBRO 2: TEMU (Blindado con Cruce de Diccionario Anti-Errores) ===
         elif plataforma == 'TEMU':
-            patron_pdf = r'(PO-\d{3}-\d+)'
+            patron_pdf = r'(PO-\d{3}-\d+|JMX\d+|606\d+)'
             po_actual = None 
             
             for num_pagina, pagina in enumerate(reader.pages):
@@ -249,22 +255,32 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 matches = re.findall(patron_pdf, texto)
                 
                 if matches:
-                    po_encontrado = str(matches[0]).strip()
-                    po_actual = po_encontrado 
+                    # Validamos de forma estricta que lo encontrado exista en la base
+                    id_encontrado = None
+                    for m in matches:
+                        m_clean = str(m).strip()
+                        if m_clean in mapa_pedidos_cruzados:
+                            id_encontrado = mapa_pedidos_cruzados[m_clean]
+                            break
                     
-                    if po_actual not in paginas_por_po:
-                        paginas_por_po[po_actual] = []
-                        if num_pagina > 0:
-                            if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
-                                paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
+                    # Si el ID es válido y real, actualizamos el cliente actual
+                    if id_encontrado:
+                        po_actual = id_encontrado
+                        if po_actual not in paginas_por_po:
+                            paginas_por_po[po_actual] = []
+                            if num_pagina > 0:
+                                if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
+                                    paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
                     
-                    if pagina not in paginas_por_po[po_actual]:
-                        paginas_por_po[po_actual].append(pagina)
+                    if po_actual:
+                        if pagina not in paginas_por_po[po_actual]:
+                            paginas_por_po[po_actual].append(pagina)
                 else:
-                    # En Temu, si no hace match (hojas extras sueltas), se ignora exactamente como en el script
-                    pass
+                    if po_actual:
+                        if pagina not in paginas_por_po[po_actual]:
+                            paginas_por_po[po_actual].append(pagina)
 
-        # === CEREBRO 3: TIKTOK (Robot Bueno con Diccionario) ===
+        # === CEREBRO 3: TIKTOK (Código intacto original) ===
         elif plataforma == 'TIKTOK':
             patron_pdf = r'(JMX\d+)'
             po_actual = None 
@@ -287,10 +303,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         if pagina not in paginas_por_po[po_actual]:
                             paginas_por_po[po_actual].append(pagina)
 
-            # Cruce de JMX a Order ID para TikTok
             paginas_corregidas = {}
             for jmx_key, paginas in paginas_por_po.items():
-                order_id = mapa_pedidos_tiktok.get(jmx_key, jmx_key)
+                order_id = mapa_pedidos_cruzados.get(jmx_key, jmx_key)
                 if order_id not in paginas_corregidas:
                     paginas_corregidas[order_id] = []
                 for pag in paginas:
@@ -298,7 +313,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         paginas_corregidas[order_id].append(pag)
             paginas_por_po = paginas_corregidas
             
-        # Filtramos la lista maestra de CSV basándonos en lo que se armó en los PDFs
         lista_pos_pdf = list(paginas_por_po.keys())
         pos_finales_reales = [po for po in pos_finales_reales if po in lista_pos_pdf]
 
@@ -315,12 +329,12 @@ if st.button("🚀 Procesar Guías", type="primary"):
             st.error("❌ ERROR: Ningún pedido físico en el PDF coincidió con tu Excel.")
             st.stop()
 
-        st.success(f"📄 ÉXITO: Se procesarán y empacarán {len(pos_finales_reales)} pedidos únicos perfectamente sincronizados.")
+        st.success(f"📄 ÉXITO: Se procesarán {len(pos_finales_reales)} pedidos únicos sincronizados.")
 
         df_ordenado['PEDIDO'] = pd.Categorical(df_ordenado['PEDIDO'], categories=pos_finales_reales, ordered=True)
         df_ordenado = df_ordenado.sort_values('PEDIDO')
 
-        # --- REPARTICIÓN Y CREACIÓN DE ARCHIVOS EN MEMORIA ---
+        # --- REPARTICIÓN EQUITATIVA ---
         num_empleados = len(empleados)
         pos_base = len(pos_finales_reales) // num_empleados
         sobrantes = len(pos_finales_reales) % num_empleados
@@ -344,13 +358,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     if not df_emp.empty:
                         color_actual = colores_division[i % len(colores_division)]
                         
-                        # 1. Crear Pestañas Principales del Excel
                         worksheet = writer.book.add_worksheet(emp)
                         formato_titulo = writer.book.add_format({'bold': True, 'font_size': 14, 'bg_color': color_actual, 'border': 1})
                         worksheet.write(0, 0, f"LISTA DE RECOLECCIÓN PARA: {emp.upper()}", formato_titulo)
                         worksheet.write(1, 0, f"Total de guías asignadas: {len(pos_del_empleado)}")
                         
-                        # --- TABLA SUPERIOR (Agrupada) ---
                         picking_list = df_emp.groupby(['SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
                         picking_list.rename(columns={'Nombre Correcto': 'Descripción (Según BASE)', 'CANTIDAD': 'Total a Recolectar'}, inplace=True)
                         picking_list = picking_list.sort_values(by='Descripción (Según BASE)').reset_index(drop=True)
@@ -364,7 +376,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         worksheet.set_column('A:A', 20)
                         worksheet.set_column('B:B', 65)
 
-                        # --- TABLA INFERIOR (Agrupada para evitar visuales duplicados) ---
                         fila_orden = fin_t1 + 3
                         worksheet.write(fila_orden, 0, f"ORDEN EXACTO DE GUÍAS DE {emp.upper()}:", formato_titulo)
                         
@@ -372,9 +383,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         df_orden_imp.rename(columns={'PEDIDO_DISPLAY': 'PEDIDO', 'CANTIDAD': 'Cant.'}, inplace=True)
                         df_orden_imp.to_excel(writer, sheet_name=emp, index=False, startrow=fila_orden + 2, startcol=0)
                         
-                        # ---------------------------------------------------------
-                        # 2. CREAR LA HOJA DE TICKETS (Formato para Térmica)
-                        # ---------------------------------------------------------
                         hoja_ticket = writer.book.add_worksheet(f"{emp}_Ticket")
                         
                         fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
@@ -423,9 +431,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         hoja_ticket.fit_to_pages(1, 0) 
                         hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1) 
                         
-                        # ---------------------------------------------------------
-                        # 3. CREAR PDFs EN MEMORIA
-                        # ---------------------------------------------------------
                         pdf_writer = PyPDF2.PdfWriter()
                         for po in pos_del_empleado:
                             if po in paginas_por_po:
@@ -448,7 +453,7 @@ if 'descarga_lista' in st.session_state:
     fecha = datetime.now().strftime("%d-%m-%Y")
     nombre_archivo = f"Guias_{plat}_{fecha}.zip"
     
-    st.success(f"✨ ¡Todo listo! Se ha generado el archivo {nombre_archivo} con el Excel de repartición y los PDFs individuales.")
+    st.success(f"✨ ¡Todo listo! Se ha generado el archivo {nombre_archivo}.")
     
     st.download_button(
         label=f"📦 Descargar {nombre_archivo}",
