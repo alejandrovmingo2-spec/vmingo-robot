@@ -92,29 +92,32 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 break
                 
         archivo_csv.seek(0) 
-        # ESCUDO ANTI-MUTACIÓN
         df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion, dtype=str)
-        
         cols_map = {c.lower().strip(): c for c in df.columns}
 
         # --- DICCIONARIO MAESTRO SANITIZADO ---
         mapa_pedidos_cruzados = {}
+        col_track_name = "N/A"
         if plataforma in ['TIKTOK', 'TEMU']:
             if plataforma == 'TIKTOK':
                 col_order = cols_map.get('order id')
                 col_track = cols_map.get('tracking id')
             else: # TEMU
                 col_order = cols_map.get('id del pedido')
-                col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento'))
+                col_track = None
+                for c in cols_map:
+                    if 'seguimiento' in c or 'tracking' in c:
+                        col_track = cols_map[c]
                 
+            col_track_name = col_track if col_track else "¡Columna No Encontrada!"
+            
             for idx, row in df.iterrows():
                 order_id = str(row.get(col_order, '')).strip()
                 order_id = re.sub(r'[="\'\s\t]', '', order_id) 
                 if order_id.endswith('.0'): order_id = order_id[:-2]
                 
                 tracking_id = str(row.get(col_track, '')).strip() if col_track else ''
-                tracking_id = re.sub(r'[^a-zA-Z0-9]', '', tracking_id) 
-                if tracking_id.endswith('.0'): tracking_id = tracking_id[:-2]
+                tracking_id = re.sub(r'[^a-zA-Z0-9]', '', tracking_id) # Desinfectante nuclear
                 
                 if order_id and order_id != 'nan' and order_id != '':
                     mapa_pedidos_cruzados[order_id] = order_id
@@ -239,16 +242,8 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     hubo_largos = True
                 chunks_pdf.append(chunk_actual)
 
-            num_pedidos_csv = len(pos_finales_reales)
-            num_bloques_pdf = len(chunks_pdf)
-
-            if num_bloques_pdf != num_pedidos_csv:
-                st.error(f"🚨 ALERTA CRÍTICA DE DESFASE: El Excel dice que hay {num_pedidos_csv} pedidos, pero el robot contó {num_bloques_pdf} guías en el PDF. Revisa si hay pedidos cancelados.")
-            elif hubo_largos:
-                st.info("💡 NOTA: Se detectaron pedidos con más de 2 páginas. El robot absorbió las páginas extra automáticamente.")
-
             for i, pedido_gsh in enumerate(pos_finales_reales):
-                if i < num_bloques_pdf:
+                if i < len(chunks_pdf):
                     paginas_por_po[pedido_gsh] = chunks_pdf[i]
                 else:
                     paginas_por_po[pedido_gsh] = []
@@ -334,9 +329,29 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
+        # ====== PANEL DE DIAGNÓSTICO MAESTRO ======
         if df_ordenado.empty:
-            st.error("❌ ERROR: Ningún pedido físico en el PDF coincidió con tu Excel. Verifica que coincidan los tracking codes.")
+            st.error("❌ ERROR: Ningún pedido físico en el PDF coincidió con tu Excel.")
+            
+            st.warning("🔍 **DIAGNÓSTICO AUTOMÁTICO DEL ROBOT:**")
+            st.write(f"**1. Columna de rastreo leída del Excel:** `{col_track_name}`")
+            
+            # Filtramos solo los trackings reales (ignorando los PO- internos)
+            track_keys = list(mapa_pedidos_cruzados.keys())
+            track_keys_clean = [k for k in track_keys if not str(k).startswith('PO-')]
+            
+            st.write(f"**2. Total de guías memorizadas del Excel:** `{len(track_keys_clean)}`")
+            if track_keys_clean:
+                st.write(f"Ejemplos en memoria (CSV): `{', '.join(track_keys_clean[:5])}`")
+            
+            pdf_keys = list(paginas_por_po.keys())
+            st.write(f"**3. Total de pedidos detectados en el PDF:** `{len(pdf_keys)}`")
+            if pdf_keys:
+                st.write(f"Ejemplos encontrados (PDF): `{', '.join(pdf_keys[:5])}`")
+                
+            st.info("💡 **Conclusión:** Revisa los ejemplos de arriba. Si los números de memoria no coinciden con los del PDF, es probable que los archivos sean de lotes distintos o que la columna se haya leído en blanco.")
             st.stop()
+        # ==========================================
 
         st.success(f"📄 ÉXITO: Se procesarán y empacarán {len(pos_finales_reales)} pedidos únicos perfectamente sincronizados.")
 
