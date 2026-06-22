@@ -105,11 +105,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 col_track = cols_map.get('tracking id')
             else: # TEMU
                 col_order = cols_map.get('id del pedido')
-                col_track = None
-                # ELIMINAMOS EL BREAK: Ahora tomará la ÚLTIMA columna (AJ) ignorando la falsa (AF)
-                for c in cols_map:
-                    if 'seguimiento' in c or 'tracking' in c:
-                        col_track = cols_map[c]
+                col_track = cols_map.get('número de seguimiento', cols_map.get('numero de seguimiento'))
                 
             for idx, row in df.iterrows():
                 order_id = str(row.get(col_order, '')).strip()
@@ -117,7 +113,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 if order_id.endswith('.0'): order_id = order_id[:-2]
                 
                 tracking_id = str(row.get(col_track, '')).strip() if col_track else ''
-                tracking_id = re.sub(r'[="\'\s\t]', '', tracking_id) 
+                tracking_id = re.sub(r'[^a-zA-Z0-9]', '', tracking_id) 
                 if tracking_id.endswith('.0'): tracking_id = tracking_id[:-2]
                 
                 if order_id and order_id != 'nan' and order_id != '':
