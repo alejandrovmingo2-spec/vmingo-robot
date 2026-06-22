@@ -97,7 +97,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
         # --- DICCIONARIO MAESTRO SANITIZADO ---
         mapa_pedidos_cruzados = {}
+        mapa_pedido_tracking = {} 
         col_track_name = "N/A"
+        
         if plataforma in ['TIKTOK', 'TEMU']:
             if plataforma == 'TIKTOK':
                 col_order = cols_map.get('order id')
@@ -117,12 +119,13 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 if order_id.endswith('.0'): order_id = order_id[:-2]
                 
                 tracking_id = str(row.get(col_track, '')).strip() if col_track else ''
-                tracking_id = re.sub(r'[^a-zA-Z0-9]', '', tracking_id) # Desinfectante nuclear
+                tracking_id_clean = re.sub(r'[^a-zA-Z0-9]', '', tracking_id) 
                 
                 if order_id and order_id != 'nan' and order_id != '':
                     mapa_pedidos_cruzados[order_id] = order_id
-                if tracking_id and tracking_id != 'nan' and tracking_id != '':
-                    mapa_pedidos_cruzados[tracking_id] = order_id
+                    mapa_pedido_tracking[order_id] = tracking_id_clean 
+                if tracking_id_clean and tracking_id_clean != 'nan' and tracking_id_clean != '':
+                    mapa_pedidos_cruzados[tracking_id_clean] = order_id
 
         # LIMPIEZA Y FILTRADO DEL CSV
         if plataforma == 'TEMU':
@@ -130,7 +133,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
             col_sku = cols_map.get('sku de contribución')
             col_nombre = cols_map.get('nombre del producto')
             col_var = cols_map.get('variación', cols_map.get('variacion'))
-            col_cant = cols_map.get('cantidad comprada')
+            col_cant = cols_map.get('cantidad comprada') 
             
             columnas_utiles = [c for c in [col_pedido, col_sku, col_nombre, col_var, col_cant] if c]
             df_filtrado = df[columnas_utiles].copy()
@@ -190,6 +193,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
         df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
         
         df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
+        df_filtrado['GUÍA_LOGÍSTICA'] = df_filtrado['PEDIDO'].map(mapa_pedido_tracking).fillna('N/A')
         
         df_filtrado['SKU'] = df_filtrado.get('SKU', pd.Series(dtype=str)).fillna('SIN SKU').astype(str)
         df_filtrado['CANTIDAD'] = pd.to_numeric(df_filtrado.get('CANTIDAD', pd.Series(dtype=int)), errors='coerce').fillna(0)
@@ -205,7 +209,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
         )
         df_filtrado['Nombre Correcto'] = df_filtrado['Nombre Correcto'].fillna('SIN NOMBRE').astype(str)
 
-        # EL ORDEN SAGRADO
         pos_finales_reales = list(dict.fromkeys(df_filtrado['PEDIDO'].tolist()))
 
         # --- 2. LEYENDO PDF ---
@@ -248,7 +251,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 else:
                     paginas_por_po[pedido_gsh] = []
 
-        # === CEREBRO 2: TEMU ===
+        # === CEREBRO 2: TEMU (Lógica de "Garra" Restaurada) ===
         elif plataforma == 'TEMU':
             patron_pdf = r'(PO-\d{3}-\d+|JMX\d+|606\d+|UP[A-Z0-9]+)'
             po_actual = None 
@@ -272,14 +275,18 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         po_actual = id_encontrado
                         if po_actual not in paginas_por_po:
                             paginas_por_po[po_actual] = []
+                            # LA GARRA EXTRACTORA: Si estamos en la hoja de productos (PO-), jala la guía anterior.
                             if num_pagina > 0:
-                                if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
+                                # Verificamos si el match fue un PO-
+                                match_es_po = any(str(m).startswith('PO-') for m in matches)
+                                if match_es_po and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
                                     paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
-                    
-                    if po_actual:
+                        
+                        # Guardamos la página actual
                         if pagina not in paginas_por_po[po_actual]:
                             paginas_por_po[po_actual].append(pagina)
                 else:
+                    # Hojas extra sin códigos (ej. facturas largas) se pegan al cliente actual
                     if po_actual:
                         if pagina not in paginas_por_po[po_actual]:
                             paginas_por_po[po_actual].append(pagina)
@@ -329,29 +336,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
-        # ====== PANEL DE DIAGNÓSTICO MAESTRO ======
         if df_ordenado.empty:
             st.error("❌ ERROR: Ningún pedido físico en el PDF coincidió con tu Excel.")
-            
-            st.warning("🔍 **DIAGNÓSTICO AUTOMÁTICO DEL ROBOT:**")
-            st.write(f"**1. Columna de rastreo leída del Excel:** `{col_track_name}`")
-            
-            # Filtramos solo los trackings reales (ignorando los PO- internos)
-            track_keys = list(mapa_pedidos_cruzados.keys())
-            track_keys_clean = [k for k in track_keys if not str(k).startswith('PO-')]
-            
-            st.write(f"**2. Total de guías memorizadas del Excel:** `{len(track_keys_clean)}`")
-            if track_keys_clean:
-                st.write(f"Ejemplos en memoria (CSV): `{', '.join(track_keys_clean[:5])}`")
-            
-            pdf_keys = list(paginas_por_po.keys())
-            st.write(f"**3. Total de pedidos detectados en el PDF:** `{len(pdf_keys)}`")
-            if pdf_keys:
-                st.write(f"Ejemplos encontrados (PDF): `{', '.join(pdf_keys[:5])}`")
-                
-            st.info("💡 **Conclusión:** Revisa los ejemplos de arriba. Si los números de memoria no coinciden con los del PDF, es probable que los archivos sean de lotes distintos o que la columna se haya leído en blanco.")
             st.stop()
-        # ==========================================
 
         st.success(f"📄 ÉXITO: Se procesarán y empacarán {len(pos_finales_reales)} pedidos únicos perfectamente sincronizados.")
 
@@ -403,7 +390,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         fila_orden = fin_t1 + 3
                         worksheet.write(fila_orden, 0, f"ORDEN EXACTO DE GUÍAS DE {emp.upper()}:", formato_titulo)
                         
-                        df_orden_imp = df_emp.groupby(['PEDIDO_DISPLAY', 'SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
+                        df_orden_imp = df_emp.groupby(['PEDIDO_DISPLAY', 'GUÍA_LOGÍSTICA', 'SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
                         df_orden_imp.rename(columns={'PEDIDO_DISPLAY': 'PEDIDO', 'CANTIDAD': 'Cant.'}, inplace=True)
                         df_orden_imp.to_excel(writer, sheet_name=emp, index=False, startrow=fila_orden + 2, startcol=0)
                         
