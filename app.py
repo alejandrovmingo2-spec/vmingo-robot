@@ -92,10 +92,9 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 break
                 
         archivo_csv.seek(0) 
-        # ESCUDO ANTI-MUTACIÓN: Lectura como texto plano puro (dtype=str)
+        # ESCUDO ANTI-MUTACIÓN
         df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion, dtype=str)
         
-        # Mapeo robusto de columnas sin importar mayúsculas
         cols_map = {c.lower().strip(): c for c in df.columns}
 
         # --- DICCIONARIO MAESTRO SANITIZADO ---
@@ -107,18 +106,18 @@ if st.button("🚀 Procesar Guías", type="primary"):
             else: # TEMU
                 col_order = cols_map.get('id del pedido')
                 col_track = None
+                # ELIMINAMOS EL BREAK: Ahora tomará la ÚLTIMA columna (AJ) ignorando la falsa (AF)
                 for c in cols_map:
                     if 'seguimiento' in c or 'tracking' in c:
                         col_track = cols_map[c]
-                        break
                 
             for idx, row in df.iterrows():
                 order_id = str(row.get(col_order, '')).strip()
-                order_id = re.sub(r'[="\'\s\t]', '', order_id) # LIMPIEZA
+                order_id = re.sub(r'[="\'\s\t]', '', order_id) 
                 if order_id.endswith('.0'): order_id = order_id[:-2]
                 
                 tracking_id = str(row.get(col_track, '')).strip() if col_track else ''
-                tracking_id = re.sub(r'[="\'\s\t]', '', tracking_id) # LIMPIEZA
+                tracking_id = re.sub(r'[="\'\s\t]', '', tracking_id) 
                 if tracking_id.endswith('.0'): tracking_id = tracking_id[:-2]
                 
                 if order_id and order_id != 'nan' and order_id != '':
@@ -126,7 +125,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 if tracking_id and tracking_id != 'nan' and tracking_id != '':
                     mapa_pedidos_cruzados[tracking_id] = order_id
 
-        # LIMPIEZA Y FILTRADO DEL CSV DEPENDIENDO LA PLATAFORMA
+        # LIMPIEZA Y FILTRADO DEL CSV
         if plataforma == 'TEMU':
             col_pedido = cols_map.get('id del pedido')
             col_sku = cols_map.get('sku de contribución')
@@ -188,7 +187,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
             
         df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
         
-        # LA CIRUGÍA FINAL: Limpiamos la columna PEDIDO de signos de Excel para que el cruce sea perfecto
         df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: re.sub(r'[="\'\s\t]', '', x))
         df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
         
@@ -208,10 +206,10 @@ if st.button("🚀 Procesar Guías", type="primary"):
         )
         df_filtrado['Nombre Correcto'] = df_filtrado['Nombre Correcto'].fillna('SIN NOMBRE').astype(str)
 
-        # EL ORDEN SAGRADO DEL CSV (Lista única de pedidos tal como vienen exportados)
+        # EL ORDEN SAGRADO
         pos_finales_reales = list(dict.fromkeys(df_filtrado['PEDIDO'].tolist()))
 
-        # --- 2. LEYENDO PDF (3 CEREBROS INDEPENDIENTES) ---
+        # --- 2. LEYENDO PDF ---
         paginas_por_po = {}
         reader = PyPDF2.PdfReader(archivo_pdf)
         
@@ -328,7 +326,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         paginas_corregidas[order_id].append(pag)
             paginas_por_po = paginas_corregidas
             
-        # Filtramos la lista maestra de CSV basándonos en lo que se armó en los PDFs
         lista_pos_pdf = list(paginas_por_po.keys())
         pos_finales_reales = [po for po in pos_finales_reales if po in lista_pos_pdf]
 
@@ -374,13 +371,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
                     if not df_emp.empty:
                         color_actual = colores_division[i % len(colores_division)]
                         
-                        # 1. Crear Pestañas Principales del Excel
                         worksheet = writer.book.add_worksheet(emp)
                         formato_titulo = writer.book.add_format({'bold': True, 'font_size': 14, 'bg_color': color_actual, 'border': 1})
                         worksheet.write(0, 0, f"LISTA DE RECOLECCIÓN PARA: {emp.upper()}", formato_titulo)
                         worksheet.write(1, 0, f"Total de guías asignadas: {len(pos_del_empleado)}")
                         
-                        # --- TABLA SUPERIOR (Agrupada) ---
                         picking_list = df_emp.groupby(['SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
                         picking_list.rename(columns={'Nombre Correcto': 'Descripción (Según BASE)', 'CANTIDAD': 'Total a Recolectar'}, inplace=True)
                         picking_list = picking_list.sort_values(by='Descripción (Según BASE)').reset_index(drop=True)
@@ -394,7 +389,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         worksheet.set_column('A:A', 20)
                         worksheet.set_column('B:B', 65)
 
-                        # --- TABLA INFERIOR ---
                         fila_orden = fin_t1 + 3
                         worksheet.write(fila_orden, 0, f"ORDEN EXACTO DE GUÍAS DE {emp.upper()}:", formato_titulo)
                         
@@ -402,7 +396,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         df_orden_imp.rename(columns={'PEDIDO_DISPLAY': 'PEDIDO', 'CANTIDAD': 'Cant.'}, inplace=True)
                         df_orden_imp.to_excel(writer, sheet_name=emp, index=False, startrow=fila_orden + 2, startcol=0)
                         
-                        # 2. Hoja de Tickets Térmicos
                         hoja_ticket = writer.book.add_worksheet(f"{emp}_Ticket")
                         
                         fmt_header = writer.book.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': color_actual, 'border': 1})
@@ -451,7 +444,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         hoja_ticket.fit_to_pages(1, 0) 
                         hoja_ticket.set_margins(left=0.1, right=0.1, top=0.1, bottom=0.1) 
                         
-                        # 3. Empaquetado de PDFs correspondientes
                         pdf_writer = PyPDF2.PdfWriter()
                         for po in pos_del_empleado:
                             if po in paginas_por_po:
