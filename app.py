@@ -92,13 +92,13 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 break
                 
         archivo_csv.seek(0) 
-        # ESCUDO ANTI-MUTACIÓN: Forzamos la lectura como texto plano puro (dtype=str)
+        # ESCUDO ANTI-MUTACIÓN: Lectura como texto plano puro (dtype=str)
         df = pd.read_csv(archivo_csv, skiprows=skip_lineas, encoding=codificacion, dtype=str)
         
         # Mapeo robusto de columnas sin importar mayúsculas
         cols_map = {c.lower().strip(): c for c in df.columns}
 
-        # --- DICCIONARIO MAESTRO SANITIZADO (Para TikTok y Temu) ---
+        # --- DICCIONARIO MAESTRO SANITIZADO ---
         mapa_pedidos_cruzados = {}
         if plataforma in ['TIKTOK', 'TEMU']:
             if plataforma == 'TIKTOK':
@@ -114,12 +114,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 
             for idx, row in df.iterrows():
                 order_id = str(row.get(col_order, '')).strip()
-                # Removemos cualquier rastro de fórmulas de Excel (="PO-...") o espacios invisibles
-                order_id = re.sub(r'[="\'\s\t]', '', order_id)
+                order_id = re.sub(r'[="\'\s\t]', '', order_id) # LIMPIEZA
                 if order_id.endswith('.0'): order_id = order_id[:-2]
                 
                 tracking_id = str(row.get(col_track, '')).strip() if col_track else ''
-                tracking_id = re.sub(r'[="\'\s\t]', '', tracking_id)
+                tracking_id = re.sub(r'[="\'\s\t]', '', tracking_id) # LIMPIEZA
                 if tracking_id.endswith('.0'): tracking_id = tracking_id[:-2]
                 
                 if order_id and order_id != 'nan' and order_id != '':
@@ -188,7 +187,11 @@ if st.button("🚀 Procesar Guías", type="primary"):
             st.stop()
             
         df_filtrado = df_filtrado.dropna(subset=['PEDIDO'])
-        df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
+        
+        # LA CIRUGÍA FINAL: Limpiamos la columna PEDIDO de signos de Excel para que el cruce sea perfecto
+        df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].astype(str).apply(lambda x: re.sub(r'[="\'\s\t]', '', x))
+        df_filtrado['PEDIDO'] = df_filtrado['PEDIDO'].apply(lambda x: x.replace('.0', '') if x.endswith('.0') else x).str.strip()
+        
         df_filtrado['PEDIDO_DISPLAY'] = df_filtrado['PEDIDO']
         
         df_filtrado['SKU'] = df_filtrado.get('SKU', pd.Series(dtype=str)).fillna('SIN SKU').astype(str)
@@ -256,18 +259,17 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 else:
                     paginas_por_po[pedido_gsh] = []
 
-        # === CEREBRO 2: TEMU (Buscador Multi-Patrón con Sanitización de Texto) ===
+        # === CEREBRO 2: TEMU ===
         elif plataforma == 'TEMU':
             patron_pdf = r'(PO-\d{3}-\d+|JMX\d+|606\d+|UP[A-Z0-9]+)'
             po_actual = None 
             
             for num_pagina, pagina in enumerate(reader.pages):
                 texto_original = pagina.extract_text() or ""
-                texto_limpio = re.sub(r'\s+', '', texto_original) # Remueve espacios y saltos pegados por iMile
+                texto_limpio = re.sub(r'\s+', '', texto_original) 
                 
-                # Buscamos coincidencias en ambas versiones de texto para evitar perder números pegados a letras
                 matches = re.findall(patron_pdf, texto_original) + re.findall(patron_pdf, texto_limpio)
-                matches = list(set(matches)) # Limpieza de duplicados numéricos
+                matches = list(set(matches)) 
                 
                 if matches:
                     id_encontrado = None
@@ -281,7 +283,6 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         po_actual = id_encontrado
                         if po_actual not in paginas_por_po:
                             paginas_por_po[po_actual] = []
-                            # Arrastra la mini-hoja térmica superior de especificaciones si existe
                             if num_pagina > 0:
                                 if reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
                                     paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
