@@ -130,7 +130,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
             col_sku = cols_map.get('sku de contribución')
             col_nombre = cols_map.get('nombre del producto')
             col_var = cols_map.get('variación', cols_map.get('variacion'))
-            col_cant = cols_map.get('cantidad a enviar')
+            col_cant = cols_map.get('cantidad comprada')
             
             columnas_utiles = [c for c in [col_pedido, col_sku, col_nombre, col_var, col_cant] if c]
             df_filtrado = df[columnas_utiles].copy()
