@@ -251,7 +251,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                 else:
                     paginas_por_po[pedido_gsh] = []
 
-        # === CEREBRO 2: TEMU (Lógica de "Garra" Restaurada) ===
+        # === CEREBRO 2: TEMU (Lógica Blindada sin Pegamento Huérfano) ===
         elif plataforma == 'TEMU':
             patron_pdf = r'(PO-\d{3}-\d+|JMX\d+|606\d+|UP[A-Z0-9]+)'
             po_actual = None 
@@ -275,21 +275,16 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         po_actual = id_encontrado
                         if po_actual not in paginas_por_po:
                             paginas_por_po[po_actual] = []
-                            # LA GARRA EXTRACTORA: Si estamos en la hoja de productos (PO-), jala la guía anterior.
-                            if num_pagina > 0:
-                                # Verificamos si el match fue un PO-
-                                match_es_po = any(str(m).startswith('PO-') for m in matches)
-                                if match_es_po and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
-                                    paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
+                            
+                        # LA GARRA EXTRACTORA: Si estamos en la hoja de productos (PO-), jala la guía anterior.
+                        if num_pagina > 0:
+                            match_es_po = any(str(m).startswith('PO-') for m in matches)
+                            if match_es_po and reader.pages[num_pagina - 1] not in paginas_por_po[po_actual]:
+                                paginas_por_po[po_actual].append(reader.pages[num_pagina - 1])
                         
-                        # Guardamos la página actual
                         if pagina not in paginas_por_po[po_actual]:
                             paginas_por_po[po_actual].append(pagina)
-                else:
-                    # Hojas extra sin códigos (ej. facturas largas) se pegan al cliente actual
-                    if po_actual:
-                        if pagina not in paginas_por_po[po_actual]:
-                            paginas_por_po[po_actual].append(pagina)
+                # SE ELIMINÓ EL ELSE: Las hojas sin texto ya no se pegan al cliente anterior
 
         # === CEREBRO 3: TIKTOK ===
         elif plataforma == 'TIKTOK':
@@ -336,9 +331,28 @@ if st.button("🚀 Procesar Guías", type="primary"):
 
         df_ordenado = pd.concat(filas_ordenadas) if filas_ordenadas else pd.DataFrame()
 
+        # ====== PANEL DE DIAGNÓSTICO MAESTRO ======
         if df_ordenado.empty:
             st.error("❌ ERROR: Ningún pedido físico en el PDF coincidió con tu Excel.")
+            
+            st.warning("🔍 **DIAGNÓSTICO AUTOMÁTICO DEL ROBOT:**")
+            st.write(f"**1. Columna de rastreo leída del Excel:** `{col_track_name}`")
+            
+            track_keys = list(mapa_pedidos_cruzados.keys())
+            track_keys_clean = [k for k in track_keys if not str(k).startswith('PO-')]
+            
+            st.write(f"**2. Total de guías memorizadas del Excel:** `{len(track_keys_clean)}`")
+            if track_keys_clean:
+                st.write(f"Ejemplos en memoria (CSV): `{', '.join(track_keys_clean[:5])}`")
+            
+            pdf_keys = list(paginas_por_po.keys())
+            st.write(f"**3. Total de pedidos detectados en el PDF:** `{len(pdf_keys)}`")
+            if pdf_keys:
+                st.write(f"Ejemplos encontrados (PDF): `{', '.join(pdf_keys[:5])}`")
+                
+            st.info("💡 **Conclusión:** Revisa los ejemplos de arriba. Si los números de memoria no coinciden con los del PDF, es probable que los archivos sean de lotes distintos o que la columna se haya leído en blanco.")
             st.stop()
+        # ==========================================
 
         st.success(f"📄 ÉXITO: Se procesarán y empacarán {len(pos_finales_reales)} pedidos únicos perfectamente sincronizados.")
 
@@ -390,6 +404,7 @@ if st.button("🚀 Procesar Guías", type="primary"):
                         fila_orden = fin_t1 + 3
                         worksheet.write(fila_orden, 0, f"ORDEN EXACTO DE GUÍAS DE {emp.upper()}:", formato_titulo)
                         
+                        # AQUÍ AGREGAMOS LA GUÍA LOGÍSTICA AL REPORTE
                         df_orden_imp = df_emp.groupby(['PEDIDO_DISPLAY', 'GUÍA_LOGÍSTICA', 'SKU', 'Nombre Correcto'], sort=False)['CANTIDAD'].sum().reset_index()
                         df_orden_imp.rename(columns={'PEDIDO_DISPLAY': 'PEDIDO', 'CANTIDAD': 'Cant.'}, inplace=True)
                         df_orden_imp.to_excel(writer, sheet_name=emp, index=False, startrow=fila_orden + 2, startcol=0)
